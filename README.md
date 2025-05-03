@@ -27,7 +27,7 @@ Add this package to your list of dependencies in `mix.exs`, then run `mix deps.g
 ```elixir
 def deps do
   [
-    {:bulk_upsert, "0.1.1"}
+    {:bulk_upsert, "0.1.2"}
   ]
 end
 ```
