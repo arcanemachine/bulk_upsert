@@ -24,8 +24,11 @@ defmodule BulkUpsert do
       ...>   YourProject.Repo,
       ...>   YourProject.Persons.Person,
       ...>   _attrs_list = [
-      ...>     %{id: 1, name: "Alice", age: 25, phone_number: "555-1234"},
-      ...>     %{id: 2, name: "Bob", age: 35, phone_number: "555-2345"},
+      ...>     %{id: 1, name: "Alice", age: 25, phone_number: "555-1234", pets: []},
+      ...>     %{id: 2, name: "Bob", age: 35, phone_number: "555-2345", pets: [
+      ...>       %{name: "Apollo", type: "cat", age: 5},
+      ...>       %{name: "Buddy", type: "dog", age: 7},
+      ...>     ]},
       ...>   ]
       ...> )
       :ok
@@ -151,10 +154,10 @@ defmodule BulkUpsert do
         insert_all_opts =
           Keyword.merge(
             _default_parent_insert_all_opts = [
+              conflict_target: schema_module.__schema__(:primary_key),
               on_conflict:
                 {:replace_all_except,
                  schema_module.__schema__(:primary_key) ++ replace_all_except},
-              conflict_target: schema_module.__schema__(:primary_key),
               timeout: timeout
             ],
             insert_all_opts[schema_module] || []
