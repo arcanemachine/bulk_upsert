@@ -151,10 +151,10 @@ defmodule BulkUpsert do
         insert_all_opts =
           Keyword.merge(
             _default_parent_insert_all_opts = [
+              conflict_target: schema_module.__schema__(:primary_key),
               on_conflict:
                 {:replace_all_except,
                  schema_module.__schema__(:primary_key) ++ replace_all_except},
-              conflict_target: schema_module.__schema__(:primary_key),
               timeout: timeout
             ],
             insert_all_opts[schema_module] || []

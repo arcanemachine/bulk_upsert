@@ -310,6 +310,10 @@ As you can see, our new custom logic ensures that the correct timestamps are gen
 
 ---
 
+For more information, see [this project's documentation on HexDocs](https://hexdocs.pm/bulk_upsert/BulkUpsert.html).
+
+---
+
 This project made possible by Interline Travel and Tour Inc.
 
 https://www.perx.com/
