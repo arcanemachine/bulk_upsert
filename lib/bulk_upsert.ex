@@ -150,7 +150,17 @@ defmodule BulkUpsert do
     repo_module.transaction(
       fn ->
         # Perform bulk upsert for all parent attrs
-        attrs_list = changesets |> Enum.map(&attrs_from_changeset/1)
+        attrs_list =
+          changesets
+          # Drop all assoc data from the changeset (assocs are handled separately in a later step)
+          |> Enum.map(fn %Ecto.Changeset{} = changeset ->
+            changeset
+            |> Map.put(
+              :changes,
+              Map.drop(changeset.changes, schema_module.__schema__(:associations))
+            )
+          end)
+          |> Enum.map(&attrs_from_changeset/1)
 
         # Build `insert_all` opts for the parent schema
         insert_all_opts =
