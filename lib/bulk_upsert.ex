@@ -35,6 +35,10 @@ defmodule BulkUpsert do
   - `:changeset_function_atom` - The name of the 2-arity changeset function to apply for the given
   `schema_module` (Default: `:changeset`)
 
+  - `:chunk_size` - The number of parent attrs items to insert into the database in a single
+  query. Can be increased or decreased as needed to avoid hitting Postgres max item limit for a
+  single query. (Default: `1000`)
+
   - `:insert_all_function_module` - Instead of using the `:insert_all` function in the given
   `repo_module`, you may specify the name of a custom module to use instead. (Default:
   Inherited from the value specified in the `repo_module` function argument, e.g.
@@ -106,6 +110,7 @@ defmodule BulkUpsert do
   """
   def bulk_upsert(repo_module, schema_module, attrs_list, opts \\ []) do
     changeset_function_atom = Keyword.get(opts, :changeset_function_atom, :changeset)
+    chunk_size = Keyword.get(opts, :chunk_size, 1000)
     recover_changeset_errors = Keyword.get(opts, :recover_changeset_errors, %{})
 
     attrs_list
@@ -113,7 +118,7 @@ defmodule BulkUpsert do
     |> Enum.map(fn attrs -> apply(schema_module, changeset_function_atom, [attrs]) end)
     |> then(&handle_invalid_changesets(schema_module, &1, recover_changeset_errors))
     # Work around Postgres bulk limits by chunking large payloads
-    |> Enum.chunk_every(2_000)
+    |> Enum.chunk_every(chunk_size)
     # Use `Enum.map/2` instead of `Task.async_stream/2`. (This slightly decreases performance, but
     # prevents issues when using the Ecto sandbox (i.e. in the `:test` configuration environment)
     # since other functions may also call `Task.async_stream/2` before calling this function.
