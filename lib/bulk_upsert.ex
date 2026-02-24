@@ -90,7 +90,7 @@ defmodule BulkUpsert do
   except the primary key:
 
       iex> insert_all_opts = %{
-      ...>   YourProject.Persons => [on_conflict: {:replace, [:name]}]
+      ...>   YourProject.Persons.Person => [on_conflict: {:replace, [:name]}]
       ...> }
 
       iex> BulkUpsert.bulk_upsert(
