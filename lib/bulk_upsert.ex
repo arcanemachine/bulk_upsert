@@ -163,7 +163,7 @@ defmodule BulkUpsert do
           |> Enum.map(&attrs_from_changeset/1)
 
         # Build `insert_all` opts for the parent schema
-        insert_all_opts =
+        parent_insert_all_opts =
           Keyword.merge(
             _default_parent_insert_all_opts = [
               conflict_target: schema_module.__schema__(:primary_key),
@@ -178,7 +178,7 @@ defmodule BulkUpsert do
         apply(insert_all_function_module, insert_all_function_atom, [
           schema_module,
           attrs_list,
-          insert_all_opts
+          parent_insert_all_opts
         ])
 
         # Perform bulk upsert for all 'has_many' associations
