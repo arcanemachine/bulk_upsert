@@ -143,6 +143,7 @@ defmodule BulkUpsert do
     insert_all_function_atom = Keyword.get(opts, :insert_all_function_atom, :insert_all)
     insert_all_opts = Keyword.get(opts, :insert_all_opts, [])
     replace_all_except = Keyword.get(opts, :replace_all_except, [])
+    chunk_size = Keyword.get(opts, :chunk_size, 1000)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
     # Wrap all bulk upserts in a transaction so that any failures will roll back all changes made
@@ -208,11 +209,15 @@ defmodule BulkUpsert do
               insert_all_opts[association_schema_module] || []
             )
 
-          apply(insert_all_function_module, insert_all_function_atom, [
-            association_schema_module,
-            association_attrs_list,
-            association_insert_all_opts
-          ])
+          association_attrs_list
+          |> Enum.chunk_every(chunk_size)
+          |> Enum.each(fn association_attrs_chunk ->
+            apply(insert_all_function_module, insert_all_function_atom, [
+              association_schema_module,
+              association_attrs_chunk,
+              association_insert_all_opts
+            ])
+          end)
         end
 
         # FIXME: Add logic for other bulk upsert for other associations as needed: `has_one`,
