@@ -15,7 +15,7 @@ defmodule BulkUpsert.MixProject do
 
       # Hex
       description:
-        "Upsert multiple Ecto schema structs to the database with a single function call.",
+        "Upsert multiple nested Ecto schema structs to the database with a single function call.",
       package: package(),
 
       # Docs
