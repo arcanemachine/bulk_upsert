@@ -57,6 +57,13 @@ defmodule BulkUpsert do
   except for the primary key(s) and the insert timestamp. (Default: `%{}`)
     - Example: `%{YourProject.Persons.Person => [on_conflict: {:nothing}]}`
 
+  - `:placeholders` - Set fields from shared values that are sent to the database once instead of
+  once per row, using the `:placeholders` feature of Ecto's `insert_all/3`. This option is a map
+  whose key is the schema or source being upserted, and the value is a map of `field => value`.
+  The fields are set after changeset validation, so they do not need to appear in the attrs.
+  (Default: `%{}`)
+    - Example: `%{YourProject.Persons.Person => %{inserted_at: DateTime.utc_now()}}`
+
   - `:recover_changeset_errors` - If the given fields in a changeset have errors, then replace
   them with a custom fallback value. (Default: `%{}`)
     - Example: `%{YourProject.Persons.Person => %{phone_number: "INVALID"}}`
@@ -116,11 +123,6 @@ defmodule BulkUpsert do
   on the parent row as part of the parent upsert.
 
   ## Known limitations
-
-  - This function will not currently work with the `:placeholders` option of
-  Ecto's `insert_all/3` function. This is because the attrs are passed directly to the changesets
-  for validation, so the placeholder values will not be parsed correctly. This functionality can
-  be added later if needed.
 
   - Nested `belongs_to` associations are not upserted. To associate with a `belongs_to` parent,
   include its foreign key field in the attrs (e.g. `category_id`).
