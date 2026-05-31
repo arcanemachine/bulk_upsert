@@ -1,5 +1,5 @@
 defmodule BulkUpsert do
-  @moduledoc "Enable bulk upsert functionality when working with Ecto."
+  @moduledoc "Bulk upsert a list of Ecto structs and their nested associations in one call."
 
   require Logger
 
