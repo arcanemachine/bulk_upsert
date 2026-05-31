@@ -155,6 +155,37 @@ defmodule BulkUpsert do
     |> Map.reject(fn {k, _v} -> k not in Map.keys(changeset.changes) end)
   end
 
+  # Upsert a list of entries into a schema or source, applying any configured placeholders and
+  # chunking large payloads to stay within Postgres bulk limits.
+  defp insert_all_entries(entries, schema_or_source, insert_all_opts, context) do
+    placeholder_values = context.placeholders[schema_or_source] || %{}
+
+    # Placeholder fields are set here, after changeset validation, because a `{:placeholder, key}`
+    # tuple cannot pass through a changeset. Each placeholder value is sent to Postgres once.
+    {entries, insert_all_opts} =
+      if placeholder_values == %{} do
+        {entries, insert_all_opts}
+      else
+        placeholder_attrs =
+          Map.new(placeholder_values, fn {field, _value} -> {field, {:placeholder, field}} end)
+
+        {
+          Enum.map(entries, &Map.merge(&1, placeholder_attrs)),
+          Keyword.put(insert_all_opts, :placeholders, placeholder_values)
+        }
+      end
+
+    entries
+    |> Enum.chunk_every(context.chunk_size)
+    |> Enum.each(fn entries_chunk ->
+      apply(context.insert_all_function_module, context.insert_all_function_atom, [
+        schema_or_source,
+        entries_chunk,
+        insert_all_opts
+      ])
+    end)
+  end
+
   defp do_bulk_upsert(repo_module, schema_module, changesets, opts) do
     insert_all_function_module = Keyword.get(opts, :insert_all_function_module, repo_module)
     insert_all_function_atom = Keyword.get(opts, :insert_all_function_atom, :insert_all)
@@ -162,6 +193,15 @@ defmodule BulkUpsert do
     replace_all_except = Keyword.get(opts, :replace_all_except, [])
     chunk_size = Keyword.get(opts, :chunk_size, 1000)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
+    placeholders = Keyword.get(opts, :placeholders, %{})
+
+    # Bundle the values that every `insert_all` call site shares
+    insert_all_context = %{
+      insert_all_function_module: insert_all_function_module,
+      insert_all_function_atom: insert_all_function_atom,
+      chunk_size: chunk_size,
+      placeholders: placeholders
+    }
 
     # Wrap all bulk upserts in a transaction so that any failures will roll back all changes made
     # to the parent and all of its associations
@@ -193,11 +233,7 @@ defmodule BulkUpsert do
             insert_all_opts[schema_module] || []
           )
 
-        apply(insert_all_function_module, insert_all_function_atom, [
-          schema_module,
-          attrs_list,
-          parent_insert_all_opts
-        ])
+        insert_all_entries(attrs_list, schema_module, parent_insert_all_opts, insert_all_context)
 
         # Perform bulk upsert for all `has_many` and `has_one` associations
         for association <- get_schema_associations(schema_module, :has) do
@@ -227,15 +263,12 @@ defmodule BulkUpsert do
               insert_all_opts[association_schema_module] || []
             )
 
-          association_attrs_list
-          |> Enum.chunk_every(chunk_size)
-          |> Enum.each(fn association_attrs_chunk ->
-            apply(insert_all_function_module, insert_all_function_atom, [
-              association_schema_module,
-              association_attrs_chunk,
-              association_insert_all_opts
-            ])
-          end)
+          insert_all_entries(
+            association_attrs_list,
+            association_schema_module,
+            association_insert_all_opts,
+            insert_all_context
+          )
         end
 
         # Perform bulk upsert for all `many_to_many` associations
@@ -277,15 +310,12 @@ defmodule BulkUpsert do
               insert_all_opts[related_schema_module] || []
             )
 
-          related_attrs_list
-          |> Enum.chunk_every(chunk_size)
-          |> Enum.each(fn related_attrs_chunk ->
-            apply(insert_all_function_module, insert_all_function_atom, [
-              related_schema_module,
-              related_attrs_chunk,
-              related_insert_all_opts
-            ])
-          end)
+          insert_all_entries(
+            related_attrs_list,
+            related_schema_module,
+            related_insert_all_opts,
+            insert_all_context
+          )
 
           # Upsert the join table rows that link each parent to its related records. The same link
           # may be listed more than once, so duplicate rows are removed for the same reason.
@@ -309,15 +339,12 @@ defmodule BulkUpsert do
               insert_all_opts[join_through] || []
             )
 
-          join_attrs_list
-          |> Enum.chunk_every(chunk_size)
-          |> Enum.each(fn join_attrs_chunk ->
-            apply(insert_all_function_module, insert_all_function_atom, [
-              join_through,
-              join_attrs_chunk,
-              join_insert_all_opts
-            ])
-          end)
+          insert_all_entries(
+            join_attrs_list,
+            join_through,
+            join_insert_all_opts,
+            insert_all_context
+          )
         end
       end,
       timeout: timeout

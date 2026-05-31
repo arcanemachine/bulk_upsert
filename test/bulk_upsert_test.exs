@@ -227,6 +227,45 @@ defmodule BulkUpsertTest do
     end
   end
 
+  defmodule TimestampedChild do
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key {:id, :integer, autogenerate: false}
+    schema "timestamped_children" do
+      field :parent_id, :integer
+      field :value, :string
+      field :inserted_at, :utc_datetime_usec
+    end
+
+    def changeset(attrs), do: changeset(%__MODULE__{}, attrs)
+
+    def changeset(struct, attrs) do
+      struct
+      |> cast(attrs, [:id, :parent_id, :value])
+      |> validate_required([:id, :parent_id, :value])
+    end
+  end
+
+  defmodule ParentWithTimestamps do
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key {:id, :integer, autogenerate: false}
+    schema "parents_with_timestamps" do
+      field :name, :string
+      field :inserted_at, :utc_datetime_usec
+      has_many :children, TimestampedChild
+    end
+
+    def changeset(attrs) do
+      %__MODULE__{}
+      |> cast(attrs, [:id, :name])
+      |> validate_required([:id, :name])
+      |> cast_assoc(:children)
+    end
+  end
+
   defmodule ParentWithAltChangeset do
     use Ecto.Schema
     import Ecto.Changeset
@@ -458,6 +497,46 @@ defmodule BulkUpsertTest do
     [{:insert_all, ParentWithCategory, [parent_attrs], _opts}] = calls
     assert parent_attrs.category_id == 5
     refute Map.has_key?(parent_attrs, :category)
+  end
+
+  test "applies placeholders to parent and association entries and insert_all opts" do
+    timestamp = ~U[2026-01-01 00:00:00.000000Z]
+
+    attrs_list = [
+      %{id: 1, name: "parent-1", children: [%{id: 101, parent_id: 1, value: "a"}]}
+    ]
+
+    :ok =
+      BulkUpsert.bulk_upsert(RepoStub, ParentWithTimestamps, attrs_list,
+        insert_all_function_module: InsertAllSpy,
+        placeholders: %{
+          ParentWithTimestamps => %{inserted_at: timestamp},
+          TimestampedChild => %{inserted_at: timestamp}
+        }
+      )
+
+    calls = InsertAllSpy.calls()
+
+    [{:insert_all, ParentWithTimestamps, parent_entries, parent_opts}] =
+      Enum.filter(calls, fn {_fun, schema_module, _attrs, _opts} ->
+        schema_module == ParentWithTimestamps
+      end)
+
+    [{:insert_all, TimestampedChild, child_entries, child_opts}] =
+      Enum.filter(calls, fn {_fun, schema_module, _attrs, _opts} ->
+        schema_module == TimestampedChild
+      end)
+
+    # The placeholder field references the placeholder instead of carrying the value inline, while
+    # the other fields survive untouched
+    assert Enum.all?(parent_entries, &(&1.inserted_at == {:placeholder, :inserted_at}))
+    assert Enum.all?(child_entries, &(&1.inserted_at == {:placeholder, :inserted_at}))
+    assert hd(parent_entries).name == "parent-1"
+    assert hd(child_entries).value == "a"
+
+    # The placeholder value is sent once per schema via insert_all's `:placeholders` option
+    assert parent_opts[:placeholders] == %{inserted_at: timestamp}
+    assert child_opts[:placeholders] == %{inserted_at: timestamp}
   end
 
   test "uses changeset_function_atom when provided" do
