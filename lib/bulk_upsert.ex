@@ -63,6 +63,9 @@ defmodule BulkUpsert do
   The fields are set after changeset validation, so they do not need to appear in the attrs.
   (Default: `%{}`)
     - Example: `%{YourProject.Persons.Person => %{inserted_at: DateTime.utc_now()}}`
+    - Placeholder fields bypass the changeset, so they are not cast or validated.
+    - Do not include a placeholder field in the changeset's `validate_required/2`. The value is
+    absent during validation, so the changeset would be invalid and the row would be skipped.
 
   - `:recover_changeset_errors` - If the given fields in a changeset have errors, then replace
   them with a custom fallback value. (Default: `%{}`)

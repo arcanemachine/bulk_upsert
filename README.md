@@ -239,6 +239,8 @@ YourProject.Repo.bulk_upsert(
 )
 ```
 
+Placeholder fields bypass the changeset, so they are not cast or validated. Do not mark a placeholder field as required in your changeset (its value is absent during validation, which would mark the row invalid and skip it).
+
 If you need more control, you can instead provide custom logic via a custom `insert_all` function. Here is an example that shows how this can be accomplished:
 
 `lib/your_project/repo.ex`
