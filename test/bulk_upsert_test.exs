@@ -152,6 +152,45 @@ defmodule BulkUpsertTest do
     end
   end
 
+  defmodule Topic do
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key {:id, :integer, autogenerate: false}
+    schema "topics" do
+      field :name, :string
+    end
+
+    def changeset(attrs), do: changeset(%__MODULE__{}, attrs)
+
+    def changeset(struct, attrs) do
+      struct
+      |> cast(attrs, [:id, :name])
+      |> validate_required([:id, :name])
+    end
+  end
+
+  defmodule ParentWithTopics do
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key {:id, :integer, autogenerate: false}
+    schema "parents_with_topics" do
+      field :name, :string
+
+      many_to_many :topics, Topic,
+        join_through: "parents_topics",
+        join_keys: [parent_id: :id, topic_id: :id]
+    end
+
+    def changeset(attrs) do
+      %__MODULE__{}
+      |> cast(attrs, [:id, :name])
+      |> validate_required([:id, :name])
+      |> cast_assoc(:topics)
+    end
+  end
+
   defmodule ParentWithAltChangeset do
     use Ecto.Schema
     import Ecto.Changeset
@@ -320,6 +359,44 @@ defmodule BulkUpsertTest do
     [{:insert_all, ParentWithEmbeds, [parent_attrs], _opts}] = calls
     assert parent_attrs.address == %Address{street: "1 Main St", city: "Springfield"}
     assert parent_attrs.tags == [%Tag{label: "a"}, %Tag{label: "b"}]
+  end
+
+  test "upserts many_to_many related records and join rows, deduplicated" do
+    # The two parents share topic 10, which must be upserted (and linked) without duplication
+    attrs_list = [
+      %{id: 1, name: "parent-1", topics: [%{id: 10, name: "elixir"}, %{id: 11, name: "ecto"}]},
+      %{id: 2, name: "parent-2", topics: [%{id: 10, name: "elixir"}]}
+    ]
+
+    :ok =
+      BulkUpsert.bulk_upsert(RepoStub, ParentWithTopics, attrs_list,
+        insert_all_function_module: InsertAllSpy
+      )
+
+    calls = InsertAllSpy.calls()
+
+    # The related records are upserted into their own table, deduplicated by primary key
+    topic_attrs =
+      calls
+      |> Enum.filter(fn {_fun, schema_module, _attrs, _opts} -> schema_module == Topic end)
+      |> Enum.flat_map(fn {_fun, _schema_module, attrs_list, _opts} -> attrs_list end)
+
+    assert Enum.sort_by(topic_attrs, & &1.id) == [
+             %{id: 10, name: "elixir"},
+             %{id: 11, name: "ecto"}
+           ]
+
+    # The join table rows link each parent to each of its related records
+    join_attrs =
+      calls
+      |> Enum.filter(fn {_fun, source, _attrs, _opts} -> source == "parents_topics" end)
+      |> Enum.flat_map(fn {_fun, _source, attrs_list, _opts} -> attrs_list end)
+
+    assert Enum.sort_by(join_attrs, &{&1.parent_id, &1.topic_id}) == [
+             %{parent_id: 1, topic_id: 10},
+             %{parent_id: 1, topic_id: 11},
+             %{parent_id: 2, topic_id: 10}
+           ]
   end
 
   test "uses changeset_function_atom when provided" do

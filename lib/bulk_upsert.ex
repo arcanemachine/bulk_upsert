@@ -141,7 +141,7 @@ defmodule BulkUpsert do
   defp do_bulk_upsert(repo_module, schema_module, changesets, opts) do
     insert_all_function_module = Keyword.get(opts, :insert_all_function_module, repo_module)
     insert_all_function_atom = Keyword.get(opts, :insert_all_function_atom, :insert_all)
-    insert_all_opts = Keyword.get(opts, :insert_all_opts, [])
+    insert_all_opts = Keyword.get(opts, :insert_all_opts, %{})
     replace_all_except = Keyword.get(opts, :replace_all_except, [])
     chunk_size = Keyword.get(opts, :chunk_size, 1000)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
