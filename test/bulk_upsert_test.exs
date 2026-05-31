@@ -99,6 +99,59 @@ defmodule BulkUpsertTest do
     end
   end
 
+  defmodule Address do
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field :street, :string
+      field :city, :string
+    end
+
+    def changeset(struct, attrs) do
+      struct
+      |> cast(attrs, [:street, :city])
+      |> validate_required([:street, :city])
+    end
+  end
+
+  defmodule Tag do
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field :label, :string
+    end
+
+    def changeset(struct, attrs) do
+      struct
+      |> cast(attrs, [:label])
+      |> validate_required([:label])
+    end
+  end
+
+  defmodule ParentWithEmbeds do
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key {:id, :integer, autogenerate: false}
+    schema "parents_with_embeds" do
+      field :name, :string
+      embeds_one :address, Address
+      embeds_many :tags, Tag
+    end
+
+    def changeset(attrs) do
+      %__MODULE__{}
+      |> cast(attrs, [:id, :name])
+      |> validate_required([:id, :name])
+      |> cast_embed(:address)
+      |> cast_embed(:tags)
+    end
+  end
+
   defmodule ParentWithAltChangeset do
     use Ecto.Schema
     import Ecto.Changeset
@@ -239,6 +292,34 @@ defmodule BulkUpsertTest do
 
     # Only the parent that supplied a profile results in a profile upsert
     assert profile_attrs == [%{id: 101, parent_id: 1, bio: "a"}]
+  end
+
+  test "carries embeds along in the parent upsert instead of a separate table" do
+    attrs_list = [
+      %{
+        id: 1,
+        name: "parent-1",
+        address: %{street: "1 Main St", city: "Springfield"},
+        tags: [%{label: "a"}, %{label: "b"}]
+      }
+    ]
+
+    :ok =
+      BulkUpsert.bulk_upsert(RepoStub, ParentWithEmbeds, attrs_list,
+        insert_all_function_module: InsertAllSpy
+      )
+
+    calls = InsertAllSpy.calls()
+
+    # Embeds have no table of their own, so every upsert targets the parent schema
+    assert Enum.all?(calls, fn {_fun, schema_module, _attrs, _opts} ->
+             schema_module == ParentWithEmbeds
+           end)
+
+    # The embedded data rides along inside the parent attrs as applied structs
+    [{:insert_all, ParentWithEmbeds, [parent_attrs], _opts}] = calls
+    assert parent_attrs.address == %Address{street: "1 Main St", city: "Springfield"}
+    assert parent_attrs.tags == [%Tag{label: "a"}, %Tag{label: "b"}]
   end
 
   test "uses changeset_function_atom when provided" do
