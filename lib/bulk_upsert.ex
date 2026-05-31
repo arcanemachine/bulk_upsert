@@ -221,8 +221,87 @@ defmodule BulkUpsert do
           end)
         end
 
-        # FIXME: Add bulk upsert logic for other associations as needed: `many_to_many`,
-        # `embeds_one`, `embeds_many`
+        # Perform bulk upsert for all `many_to_many` associations
+        for association <- get_schema_associations(schema_module, :many_to_many) do
+          %Ecto.Association.ManyToMany{
+            related: related_schema_module,
+            join_through: join_through,
+            join_keys: [{owner_join_key, owner_key}, {related_join_key, related_key}]
+          } = schema_module.__changeset__()[association] |> elem(1)
+
+          # Pair each parent's primary key with each of its related changesets, so the related
+          # records and the join rows can both be derived from the same data.
+          parent_related_pairs =
+            Enum.flat_map(changesets, fn parent_changeset ->
+              parent_changeset.changes
+              |> Map.get(association)
+              |> List.wrap()
+              |> Enum.map(fn related_changeset -> {parent_changeset, related_changeset} end)
+            end)
+
+          # Upsert the related records into their own table. The same record may be referenced by
+          # multiple parents, so duplicates are removed to avoid conflicting twice in one query.
+          related_attrs_list =
+            parent_related_pairs
+            |> Enum.map(fn {_parent_changeset, related_changeset} ->
+              attrs_from_changeset(related_changeset)
+            end)
+            |> Enum.uniq_by(&Map.take(&1, related_schema_module.__schema__(:primary_key)))
+
+          related_insert_all_opts =
+            Keyword.merge(
+              [
+                on_conflict:
+                  {:replace_all_except,
+                   related_schema_module.__schema__(:primary_key) ++ replace_all_except},
+                conflict_target: related_schema_module.__schema__(:primary_key),
+                timeout: timeout
+              ],
+              insert_all_opts[related_schema_module] || []
+            )
+
+          related_attrs_list
+          |> Enum.chunk_every(chunk_size)
+          |> Enum.each(fn related_attrs_chunk ->
+            apply(insert_all_function_module, insert_all_function_atom, [
+              related_schema_module,
+              related_attrs_chunk,
+              related_insert_all_opts
+            ])
+          end)
+
+          # Upsert the join table rows that link each parent to its related records. The same link
+          # may be listed more than once, so duplicate rows are removed for the same reason.
+          join_attrs_list =
+            parent_related_pairs
+            |> Enum.map(fn {parent_changeset, related_changeset} ->
+              %{
+                owner_join_key => Ecto.Changeset.fetch_field!(parent_changeset, owner_key),
+                related_join_key => Ecto.Changeset.fetch_field!(related_changeset, related_key)
+              }
+            end)
+            |> Enum.uniq()
+
+          join_insert_all_opts =
+            Keyword.merge(
+              [
+                on_conflict: :nothing,
+                conflict_target: [owner_join_key, related_join_key],
+                timeout: timeout
+              ],
+              insert_all_opts[join_through] || []
+            )
+
+          join_attrs_list
+          |> Enum.chunk_every(chunk_size)
+          |> Enum.each(fn join_attrs_chunk ->
+            apply(insert_all_function_module, insert_all_function_atom, [
+              join_through,
+              join_attrs_chunk,
+              join_insert_all_opts
+            ])
+          end)
+        end
       end,
       timeout: timeout
     )
@@ -233,6 +312,15 @@ defmodule BulkUpsert do
     schema_module.__changeset__()
     |> Enum.filter(fn {_k, v} ->
       match?({:assoc, %Ecto.Association.Has{}}, v)
+    end)
+    |> Keyword.keys()
+  end
+
+  # Get all `many_to_many` associations for a given schema.
+  defp get_schema_associations(schema_module, :many_to_many) do
+    schema_module.__changeset__()
+    |> Enum.filter(fn {_k, v} ->
+      match?({:assoc, %Ecto.Association.ManyToMany{}}, v)
     end)
     |> Keyword.keys()
   end
