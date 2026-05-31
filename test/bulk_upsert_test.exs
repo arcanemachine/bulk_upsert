@@ -181,6 +181,7 @@ defmodule BulkUpsertTest do
     assert [{:insert_all, ParentWithAltChangeset, [%{id: 10}], _opts}] = parent_calls
   end
 
+  @tag :capture_log
   test "rejects invalid changesets" do
     attrs_list = [
       %{id: 1, name: "valid"},
@@ -197,6 +198,7 @@ defmodule BulkUpsertTest do
              |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} -> schema_module == Parent end)
   end
 
+  @tag :capture_log
   test "recovers configured changeset errors before upsert" do
     attrs_list = [%{id: 1, phone_number: "INVALID"}]
 
