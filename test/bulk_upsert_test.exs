@@ -62,6 +62,43 @@ defmodule BulkUpsertTest do
     end
   end
 
+  defmodule Profile do
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key {:id, :integer, autogenerate: false}
+    schema "profiles" do
+      field :parent_id, :integer
+      field :bio, :string
+    end
+
+    def changeset(attrs), do: changeset(%__MODULE__{}, attrs)
+
+    def changeset(struct, attrs) do
+      struct
+      |> cast(attrs, [:id, :parent_id, :bio])
+      |> validate_required([:id, :parent_id, :bio])
+    end
+  end
+
+  defmodule ParentWithProfile do
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key {:id, :integer, autogenerate: false}
+    schema "parents_with_profile" do
+      field :name, :string
+      has_one :profile, Profile, foreign_key: :parent_id
+    end
+
+    def changeset(attrs) do
+      %__MODULE__{}
+      |> cast(attrs, [:id, :name])
+      |> validate_required([:id, :name])
+      |> cast_assoc(:profile)
+    end
+  end
+
   defmodule ParentWithAltChangeset do
     use Ecto.Schema
     import Ecto.Changeset
@@ -162,6 +199,48 @@ defmodule BulkUpsertTest do
     assert child_chunk_sizes == [2, 2, 2]
   end
 
+  test "upserts has_one associations into their own table" do
+    attrs_list = [
+      %{id: 1, name: "parent-1", profile: %{id: 101, parent_id: 1, bio: "a"}},
+      %{id: 2, name: "parent-2", profile: %{id: 102, parent_id: 2, bio: "b"}}
+    ]
+
+    :ok =
+      BulkUpsert.bulk_upsert(RepoStub, ParentWithProfile, attrs_list,
+        insert_all_function_module: InsertAllSpy
+      )
+
+    profile_attrs =
+      InsertAllSpy.calls()
+      |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} -> schema_module == Profile end)
+      |> Enum.flat_map(fn {_fun, _schema_module, attrs_list, _opts} -> attrs_list end)
+
+    # Each parent contributes its single profile to the profiles upsert
+    assert length(profile_attrs) == length(attrs_list)
+    assert %{id: 101, parent_id: 1, bio: "a"} in profile_attrs
+    assert %{id: 102, parent_id: 2, bio: "b"} in profile_attrs
+  end
+
+  test "skips parents whose has_one association is absent" do
+    attrs_list = [
+      %{id: 1, name: "parent-1", profile: %{id: 101, parent_id: 1, bio: "a"}},
+      %{id: 2, name: "parent-2"}
+    ]
+
+    :ok =
+      BulkUpsert.bulk_upsert(RepoStub, ParentWithProfile, attrs_list,
+        insert_all_function_module: InsertAllSpy
+      )
+
+    profile_attrs =
+      InsertAllSpy.calls()
+      |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} -> schema_module == Profile end)
+      |> Enum.flat_map(fn {_fun, _schema_module, attrs_list, _opts} -> attrs_list end)
+
+    # Only the parent that supplied a profile results in a profile upsert
+    assert profile_attrs == [%{id: 101, parent_id: 1, bio: "a"}]
+  end
+
   test "uses changeset_function_atom when provided" do
     attrs_list = [%{id: 10}]
 
@@ -195,7 +274,9 @@ defmodule BulkUpsertTest do
 
     assert [{:insert_all, Parent, [%{id: 1, name: "valid"}], _opts}] =
              InsertAllSpy.calls()
-             |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} -> schema_module == Parent end)
+             |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} ->
+               schema_module == Parent
+             end)
   end
 
   @tag :capture_log
@@ -263,6 +344,8 @@ defmodule BulkUpsertTest do
 
     assert [{:custom_insert_all, Parent, [%{id: 1, name: "parent-1"}], _opts}] =
              InsertAllSpy.calls()
-             |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} -> schema_module == Parent end)
+             |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} ->
+               schema_module == Parent
+             end)
   end
 end

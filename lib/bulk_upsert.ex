@@ -182,15 +182,16 @@ defmodule BulkUpsert do
           parent_insert_all_opts
         ])
 
-        # Perform bulk upsert for all 'has_many' associations
-        for association <- get_schema_associations(schema_module, :has_many) do
+        # Perform bulk upsert for all `has_many` and `has_one` associations
+        for association <- get_schema_associations(schema_module, :has) do
           association_attrs_list =
             changesets
             |> Enum.map(& &1.changes)
             |> Enum.map(&Map.get(&1, association))
-            # Reject associations that do not have nested changesets (FIXME: Is this necessary?)
-            |> Enum.reject(&is_nil/1)
-            |> List.flatten()
+            # `has_many` changes are a list of changesets; `has_one` changes are a single
+            # changeset; an absent association is `nil`. `List.wrap/1` normalizes each into a
+            # (possibly empty) list, which `flat_map` concatenates.
+            |> Enum.flat_map(&List.wrap/1)
             |> Enum.map(&attrs_from_changeset/1)
 
           association_schema_module =
@@ -220,18 +221,18 @@ defmodule BulkUpsert do
           end)
         end
 
-        # FIXME: Add logic for other bulk upsert for other associations as needed: `has_one`,
-        # `many_to_many`, `embeds_one`, `embeds_many`
+        # FIXME: Add bulk upsert logic for other associations as needed: `many_to_many`,
+        # `embeds_one`, `embeds_many`
       end,
       timeout: timeout
     )
   end
 
-  # Get all `:has_many` associations for a given schema.
-  defp get_schema_associations(schema_module, :has_many) do
+  # Get all `has_many` and `has_one` associations for a given schema.
+  defp get_schema_associations(schema_module, :has) do
     schema_module.__changeset__()
     |> Enum.filter(fn {_k, v} ->
-      match?({:assoc, %Ecto.Association.Has{cardinality: :many}}, v)
+      match?({:assoc, %Ecto.Association.Has{}}, v)
     end)
     |> Keyword.keys()
   end
@@ -262,14 +263,16 @@ defmodule BulkUpsert do
           else: {k, v}
       end)
 
-    invalid_has_many_association_attrs =
+    invalid_association_attrs =
       schema_module
-      |> get_schema_associations(:has_many)
+      |> get_schema_associations(:has)
       # Only check associations that are present in the changeset's changes (i.e. they aren't nil)
       |> Enum.reject(&is_nil(changeset.changes[&1]))
       |> Enum.reduce(%{}, fn association, acc ->
         association_error_items =
           changeset.changes[association]
+          # `has_one` changes are a single changeset; `has_many` changes are a list of changesets.
+          |> List.wrap()
           |> Enum.reject(fn changeset -> Enum.empty?(changeset.errors) end)
           |> Enum.reduce([], fn changeset, acc ->
             changeset_error_items =
@@ -287,7 +290,7 @@ defmodule BulkUpsert do
           else: acc |> Map.put(association, association_error_items)
       end)
 
-    invalid_attrs = Map.merge(invalid_parent_attrs, invalid_has_many_association_attrs)
+    invalid_attrs = Map.merge(invalid_parent_attrs, invalid_association_attrs)
 
     Logger.debug(
       """
