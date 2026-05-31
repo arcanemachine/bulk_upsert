@@ -101,12 +101,29 @@ defmodule BulkUpsert do
       ...> )
       :ok
 
+  ## Associations
+
+  Nested associations are upserted in the same call as the parent:
+
+  - `has_many` and `has_one`: the associated records are upserted into their own table. Each child
+  must include its foreign key in its attrs, since it is upserted directly via `insert_all/3`.
+
+  - `many_to_many`: the associated records are upserted into their own table, and the join table
+  rows linking each parent to its associations are upserted as well. Duplicate records and links
+  are removed automatically.
+
+  - `embeds_one` and `embeds_many`: embedded data has no table of its own, so it is stored inline
+  on the parent row as part of the parent upsert.
+
   ## Known limitations
 
   - This function will not currently work with the `:placeholders` option of
   Ecto's `insert_all/3` function. This is because the attrs are passed directly to the changesets
   for validation, so the placeholder values will not be parsed correctly. This functionality can
   be added later if needed.
+
+  - Nested `belongs_to` associations are not upserted. To associate with a `belongs_to` parent,
+  include its foreign key field in the attrs (e.g. `category_id`).
   """
   def bulk_upsert(repo_module, schema_module, attrs_list, opts \\ []) do
     changeset_function_atom = Keyword.get(opts, :changeset_function_atom, :changeset)
