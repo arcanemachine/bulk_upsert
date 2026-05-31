@@ -191,6 +191,42 @@ defmodule BulkUpsertTest do
     end
   end
 
+  defmodule Category do
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key {:id, :integer, autogenerate: false}
+    schema "categories" do
+      field :name, :string
+    end
+
+    def changeset(attrs), do: changeset(%__MODULE__{}, attrs)
+
+    def changeset(struct, attrs) do
+      struct
+      |> cast(attrs, [:id, :name])
+      |> validate_required([:id, :name])
+    end
+  end
+
+  defmodule ParentWithCategory do
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key {:id, :integer, autogenerate: false}
+    schema "parents_with_category" do
+      field :name, :string
+      belongs_to :category, Category, type: :integer
+    end
+
+    def changeset(attrs) do
+      %__MODULE__{}
+      |> cast(attrs, [:id, :name, :category_id])
+      |> validate_required([:id, :name])
+      |> cast_assoc(:category)
+    end
+  end
+
   defmodule ParentWithAltChangeset do
     use Ecto.Schema
     import Ecto.Changeset
@@ -397,6 +433,31 @@ defmodule BulkUpsertTest do
              %{parent_id: 1, topic_id: 11},
              %{parent_id: 2, topic_id: 10}
            ]
+  end
+
+  test "does not upsert nested belongs_to associations; foreign key rides along on the parent" do
+    # The parent supplies both a category_id field and a nested category association
+    attrs_list = [
+      %{id: 1, name: "parent-1", category_id: 5, category: %{id: 5, name: "books"}}
+    ]
+
+    :ok =
+      BulkUpsert.bulk_upsert(RepoStub, ParentWithCategory, attrs_list,
+        insert_all_function_module: InsertAllSpy
+      )
+
+    calls = InsertAllSpy.calls()
+
+    # The belongs_to related record is never upserted into its own table
+    refute Enum.any?(calls, fn {_fun, schema_module, _attrs, _opts} ->
+             schema_module == Category
+           end)
+
+    # The foreign key rides along as a plain field on the parent row, while the nested
+    # association changeset is dropped
+    [{:insert_all, ParentWithCategory, [parent_attrs], _opts}] = calls
+    assert parent_attrs.category_id == 5
+    refute Map.has_key?(parent_attrs, :category)
   end
 
   test "uses changeset_function_atom when provided" do
