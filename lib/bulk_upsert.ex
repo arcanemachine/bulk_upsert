@@ -132,6 +132,9 @@ defmodule BulkUpsert do
 
   - Nested `belongs_to` associations are not upserted. To associate with a `belongs_to` parent,
   include its foreign key field in the attrs (e.g. `category_id`).
+
+  - Associations are processed one level deep. A child's own nested associations are dropped
+  rather than upserted (embedded data on a child is still stored inline on the child's row).
   """
   def bulk_upsert(repo_module, schema_module, attrs_list, opts \\ []) do
     changeset_function_atom = Keyword.get(opts, :changeset_function_atom, :changeset)
@@ -219,13 +222,7 @@ defmodule BulkUpsert do
         attrs_list =
           changesets
           # Drop all assoc data from the changeset (assocs are handled separately in a later step)
-          |> Enum.map(fn %Ecto.Changeset{} = changeset ->
-            changeset
-            |> Map.put(
-              :changes,
-              Map.drop(changeset.changes, schema_module.__schema__(:associations))
-            )
-          end)
+          |> Enum.map(&drop_association_changes(&1, schema_module))
           |> Enum.map(&attrs_from_changeset/1)
 
         # Build `insert_all` opts for the parent schema
@@ -245,6 +242,9 @@ defmodule BulkUpsert do
 
         # Perform bulk upsert for all `has_many` and `has_one` associations
         for association <- get_schema_associations(schema_module, :has) do
+          association_schema_module =
+            schema_module.__changeset__()[association] |> elem(1) |> Map.fetch!(:related)
+
           association_attrs_list =
             changesets
             |> Enum.map(& &1.changes)
@@ -253,10 +253,8 @@ defmodule BulkUpsert do
             # changeset; an absent association is `nil`. `List.wrap/1` normalizes each into a
             # (possibly empty) list, which `flat_map` concatenates.
             |> Enum.flat_map(&List.wrap/1)
+            |> Enum.map(&drop_association_changes(&1, association_schema_module))
             |> Enum.map(&attrs_from_changeset/1)
-
-          association_schema_module =
-            schema_module.__changeset__()[association] |> elem(1) |> Map.fetch!(:related)
 
           # Build `insert_all` opts for the association schema
           association_insert_all_opts =
@@ -302,7 +300,9 @@ defmodule BulkUpsert do
           related_attrs_list =
             parent_related_pairs
             |> Enum.map(fn {_parent_changeset, related_changeset} ->
-              attrs_from_changeset(related_changeset)
+              related_changeset
+              |> drop_association_changes(related_schema_module)
+              |> attrs_from_changeset()
             end)
             |> Enum.uniq_by(&Map.take(&1, related_schema_module.__schema__(:primary_key)))
 
@@ -357,6 +357,12 @@ defmodule BulkUpsert do
       end,
       timeout: timeout
     )
+  end
+
+  # Associations are only processed one level deep: a child's own association changes are dropped
+  # before the child is upserted (they cannot pass through `insert_all/3`).
+  defp drop_association_changes(%Ecto.Changeset{} = changeset, schema_module) do
+    Map.update!(changeset, :changes, &Map.drop(&1, schema_module.__schema__(:associations)))
   end
 
   # Get all `has_many` and `has_one` associations for a given schema.

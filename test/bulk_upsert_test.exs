@@ -165,6 +165,22 @@ defmodule BulkUpsertTest do
     assert Repo.all(from c in Category, select: {c.id, c.name}) == [{5, "books"}]
   end
 
+  test "drops a child's own nested associations instead of upserting them" do
+    # The posts carry their own nested tags, which are one level too deep to be upserted
+    attrs_list = [
+      %{
+        id: 1,
+        name: "Alice",
+        posts: [%{id: 101, author_id: 1, title: "a", tags: [%{id: 10, name: "elixir"}]}]
+      }
+    ]
+
+    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+
+    assert Repo.get!(Post, 101).title == "a"
+    assert Repo.aggregate(Tag, :count) == 0
+  end
+
   test "sets placeholder fields on parent and association rows" do
     timestamp = ~U[2026-01-01 00:00:00.000000Z]
 
