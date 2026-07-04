@@ -269,6 +269,181 @@ defmodule BulkUpsertTest do
     assert Repo.get!(Author, 1).phone_number == "555-1234"
   end
 
+  @tag :capture_log
+  test "recovers changeset errors in nested association changesets" do
+    # The post is missing its required title, so the author's changeset carries a `:posts` error
+    attrs_list = [
+      %{id: 1, name: "Alice", posts: [%{id: 101, author_id: 1}]}
+    ]
+
+    {:ok, %{upserted: 1, skipped: 0}} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        recover_changeset_errors: %{Post => %{title: "UNTITLED"}}
+      )
+
+    assert Repo.get!(Post, 101).title == "UNTITLED"
+  end
+
+  @tag :capture_log
+  test "recovers changeset errors across multiple nesting levels" do
+    # The comment is missing its required body, which invalidates the post and the author in
+    # turn. Recovering the comment cascades validity back up through both ancestors
+    attrs_list = [
+      %{
+        id: 1,
+        name: "Alice",
+        phone_number: "oops",
+        posts: [
+          %{id: 101, author_id: 1, title: "a", comments: [%{id: 1001, post_id: 101}]}
+        ]
+      }
+    ]
+
+    {:ok, %{upserted: 1, skipped: 0}} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        recover_changeset_errors: %{
+          Author => %{phone_number: "555-1234"},
+          Comment => %{body: "[deleted]"}
+        }
+      )
+
+    assert Repo.get!(Author, 1).phone_number == "555-1234"
+    assert Repo.get!(Comment, 1001).body == "[deleted]"
+  end
+
+  @tag :capture_log
+  test "recovers changeset errors in a has_one association changeset" do
+    # The profile is missing its required bio
+    attrs_list = [%{id: 1, name: "Alice", profile: %{id: 101, author_id: 1}}]
+
+    {:ok, %{upserted: 1, skipped: 0}} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        recover_changeset_errors: %{Profile => %{bio: "(none)"}}
+      )
+
+    assert Repo.get!(Profile, 101).bio == "(none)"
+  end
+
+  @tag :capture_log
+  test "recovers changeset errors in a many_to_many association changeset" do
+    Repo.insert!(%Author{id: 1, name: "Alice"})
+
+    # The tag is missing its required name
+    attrs_list = [%{id: 1, author_id: 1, title: "P1", tags: [%{id: 10}]}]
+
+    {:ok, %{upserted: 1, skipped: 0}} =
+      BulkUpsert.bulk_upsert(Repo, Post, attrs_list,
+        recover_changeset_errors: %{Tag => %{name: "unnamed"}}
+      )
+
+    assert Repo.get!(Tag, 10).name == "unnamed"
+    assert Repo.aggregate("posts_tags", :count) == 1
+  end
+
+  @tag :capture_log
+  test "recovers one invalid child among valid siblings" do
+    attrs_list = [
+      %{
+        id: 1,
+        name: "Alice",
+        posts: [
+          %{id: 101, author_id: 1, title: "a"},
+          %{id: 102, author_id: 1}
+        ]
+      }
+    ]
+
+    {:ok, %{upserted: 1, skipped: 0}} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        recover_changeset_errors: %{Post => %{title: "UNTITLED"}}
+      )
+
+    assert Repo.all(from p in Post, order_by: p.id, select: {p.id, p.title}) ==
+             [{101, "a"}, {102, "UNTITLED"}]
+  end
+
+  @tag :capture_log
+  test "counts recovered and unrecoverable rows independently" do
+    # Post 101 is missing only its title (recoverable); post 201 is also missing its author_id,
+    # which has no fallback, so Bob's row is skipped
+    attrs_list = [
+      %{id: 1, name: "Alice", posts: [%{id: 101, author_id: 1}]},
+      %{id: 2, name: "Bob", posts: [%{id: 201}]}
+    ]
+
+    {:ok, %{upserted: 1, skipped: 1}} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        recover_changeset_errors: %{Post => %{title: "UNTITLED"}}
+      )
+
+    assert Repo.all(from a in Author, select: a.id) == [1]
+    assert Repo.all(from p in Post, select: p.id) == [101]
+  end
+
+  @tag :capture_log
+  test "does not upsert a recoverable parent whose child is unrecoverable" do
+    # The author's phone_number is recoverable, but the post's missing author_id is not. The
+    # whole row is skipped: the parent's recoverable error must not be applied partially
+    attrs_list = [
+      %{id: 1, name: "Alice", phone_number: "oops", posts: [%{id: 101, title: "a"}]}
+    ]
+
+    {:ok, %{upserted: 0, skipped: 1}} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        recover_changeset_errors: %{
+          Author => %{phone_number: "555-1234"},
+          Post => %{title: "UNTITLED"}
+        }
+      )
+
+    assert Repo.aggregate(Author, :count) == 0
+    assert Repo.aggregate(Post, :count) == 0
+  end
+
+  @tag :capture_log
+  test "does not recover errors in embedded schemas" do
+    # The address is missing its required city. Embedded changesets are never recovered, even
+    # with a fallback configured for the embedded schema
+    attrs_list = [%{id: 1, name: "Alice", address: %{street: "1 Main St"}}]
+
+    {:ok, %{upserted: 0, skipped: 1}} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        recover_changeset_errors: %{Address => %{city: "Springfield"}}
+      )
+
+    assert Repo.aggregate(Author, :count) == 0
+  end
+
+  @tag :capture_log
+  test "does not recover an error on the association field itself" do
+    # The posts attr cannot be cast at all, leaving a `:posts` error on the author. A fallback
+    # configured for the association field is ignored (a bare value cannot replace changesets)
+    attrs_list = [%{id: 1, name: "Alice", posts: "garbage"}]
+
+    {:ok, %{upserted: 0, skipped: 1}} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        recover_changeset_errors: %{Author => %{posts: []}}
+      )
+
+    assert Repo.aggregate(Author, :count) == 0
+  end
+
+  @tag :capture_log
+  test "skips the row when a nested changeset error has no fallback" do
+    # The post is missing its required author_id, and only :title has a fallback configured
+    attrs_list = [
+      %{id: 1, name: "Alice", posts: [%{id: 101, title: "a"}]}
+    ]
+
+    assert {:ok, %{upserted: 0, skipped: 1}} =
+             BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+               recover_changeset_errors: %{Post => %{title: "UNTITLED"}}
+             )
+
+    assert Repo.aggregate(Author, :count) == 0
+    assert Repo.aggregate(Post, :count) == 0
+  end
+
   test "applies custom insert_all_opts per schema" do
     insert_all_opts = %{
       Author => [on_conflict: :nothing],

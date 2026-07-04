@@ -108,8 +108,15 @@ defmodule BulkUpsert do
   - `:recover_changeset_errors` - If the given fields in a changeset have errors, then replace
   them with a custom fallback value. (Default: `%{}`)
     - Example: `%{YourProject.Persons.Person => %{phone_number: "INVALID"}}`
-    - Only applies to the parent schema's changesets. Errors in nested association changesets are
-    not recovered (the parent changeset remains invalid and the row is skipped).
+    - Applies recursively to nested association changesets, with fallbacks looked up by each
+    changeset's schema. A parent's association error is cleared once all of that association's
+    child changesets have been recovered.
+    - A changeset is only recovered if every one of its error fields has a fallback and every
+    nested changeset is recoverable by the same rule; otherwise the row is skipped.
+    - A fallback value is applied without re-running the changeset function, so it must be valid
+    for the schema.
+    - Errors on embedded schemas and on the association fields themselves (e.g. an association
+    whose attrs could not be cast at all) are never recoverable.
 
   - `:replace_all_except` - If a row already exists, then all fields will be replaced except the
   primary key, and any fields specified here. (Default: `[]`)
@@ -465,80 +472,119 @@ defmodule BulkUpsert do
   end
 
   defp recover_changesets_with_recoverable_errors(changesets, recover_changeset_errors) do
-    changeset_schema_module = List.first(changesets).data.__struct__
+    Enum.map(changesets, &recover_changeset(&1, recover_changeset_errors))
+  end
 
-    with {_matching_schema_module, recoverable_items} <-
-           Enum.find(recover_changeset_errors, fn {schema_module, _recoverable_items} ->
-             schema_module == changeset_schema_module
-           end) do
-      do_recover_changesets_with_recoverable_errors(changesets, recoverable_items)
-    else
-      _ -> changesets
+  # Recover a single changeset, recursing into its nested association changesets first
+  # (bottom-up). An association's error on the parent is cleared once all of that association's
+  # child changesets are valid. The changeset itself is then recovered only if every remaining
+  # error field has a fallback configured for the changeset's schema.
+  defp recover_changeset(%Ecto.Changeset{valid?: true} = changeset, _recover_changeset_errors) do
+    changeset
+  end
+
+  defp recover_changeset(changeset, recover_changeset_errors) do
+    schema_module = changeset.data.__struct__
+
+    # Recover the nested association changesets before the changeset's own errors, since an
+    # association error can only be cleared once all of its child changesets are valid
+    changeset =
+      schema_module.__schema__(:associations)
+      |> Enum.reduce(changeset, fn association, acc_changeset ->
+        recover_association_changesets(acc_changeset, association, recover_changeset_errors)
+      end)
+
+    fallbacks = Map.get(recover_changeset_errors, schema_module, %{})
+    error_fields = changeset.errors |> Keyword.keys() |> Enum.uniq()
+
+    # An error on an association or embed field itself (e.g. attrs that could not be cast) is
+    # never recoverable: a fallback value would replace the field's changesets in the changes
+    # with a bare value
+    nested_fields = schema_module.__schema__(:associations) ++ schema_module.__schema__(:embeds)
+    recoverable_field? = &(Map.has_key?(fallbacks, &1) and &1 not in nested_fields)
+
+    cond do
+      # An invalid child does not always leave an error entry on its parent (`cast_assoc/3` may
+      # only set `valid?: false`), so the children's own validity is checked directly. A
+      # changeset with an unrecovered child cannot be recovered
+      not nested_changesets_valid?(changeset, schema_module) ->
+        changeset
+
+      error_fields == [] ->
+        # Every error was an association error, and all child changesets have been recovered
+        %{changeset | valid?: true}
+
+      Enum.all?(error_fields, recoverable_field?) ->
+        error_fields
+        |> Enum.reduce(changeset, &recover_changeset_field(&2, &1, Map.fetch!(fallbacks, &1)))
+        # Clear the changeset's errors and mark the changeset as valid
+        |> Map.merge(%{errors: [], valid?: true})
+
+      true ->
+        # The changeset has errors with no configured fallback. The changeset (or its parent, for
+        # a nested changeset) will be removed later in the pipeline
+        changeset
     end
   end
 
-  defp do_recover_changesets_with_recoverable_errors(changesets, recoverable_items) do
-    recoverable_fields = Map.keys(recoverable_items)
-
-    changesets
-    |> Enum.map(fn changeset ->
-      if changeset.valid? do
-        changeset
-      else
-        changeset_error_fields = Keyword.keys(changeset.errors)
-
-        recoverable_changeset_error_fields =
-          Enum.filter(changeset_error_fields, &(&1 in recoverable_fields)) |> Enum.uniq()
-
-        all_errors_in_changeset_are_recoverable? =
-          changeset_error_fields |> Enum.all?(&(&1 in recoverable_fields))
-
-        if all_errors_in_changeset_are_recoverable? do
-          # Recover all errors in this changeset
-
-          recoverable_changeset_error_fields
-          |> Enum.reduce(changeset, fn recoverable_changeset_error_field, acc_changeset ->
-            {_field, recover_to_value} =
-              recoverable_items
-              |> Enum.find(fn {field, _recover_to_value} ->
-                field == recoverable_changeset_error_field
-              end)
-
-            changes_with_recovered_change =
-              acc_changeset.changes
-              |> Map.put(recoverable_changeset_error_field, recover_to_value)
-
-            Logger.debug(
-              (
-                primary_key_info =
-                  acc_changeset.data.__struct__.__schema__(:primary_key)
-                  |> Keyword.new(fn primary_key_field ->
-                    # The primary key may be absent from the changes (e.g. if the changeset
-                    # function does not require it), so avoid `Map.fetch!/2`
-                    {primary_key_field, Map.get(acc_changeset.changes, primary_key_field)}
-                  end)
-
-                struct_name = Macro.to_string(acc_changeset.data.__struct__)
-
-                """
-                Recovered changeset error for struct #{struct_name} with primary key(s) \
-                `#{inspect(primary_key_info)}` in the field \
-                `#{recoverable_changeset_error_field}`.\
-                """
-              )
-            )
-
-            acc_changeset |> Map.put(:changes, changes_with_recovered_change)
-          end)
-          # Clear the changeset's errors and mark the changeset as valid
-          |> Map.merge(%{errors: [], valid?: true})
-        else
-          # The changeset has errors that are not in the list of recoverable error fields. It will
-          # be removed later in the pipeline
-          changeset
-        end
-      end
+  # Check that every changeset in the association and embed changes is valid. Embedded
+  # changesets are never recovered, so an invalid embed permanently blocks recovery of its
+  # parent.
+  defp nested_changesets_valid?(changeset, schema_module) do
+    (schema_module.__schema__(:associations) ++ schema_module.__schema__(:embeds))
+    |> Enum.all?(fn association ->
+      changeset.changes
+      |> Map.get(association)
+      |> List.wrap()
+      |> Enum.all?(fn
+        %Ecto.Changeset{} = child_changeset -> child_changeset.valid?
+        _not_a_changeset -> true
+      end)
     end)
+  end
+
+  # Recover the changesets in one association's changes, clearing the association's error on the
+  # parent once every child changeset is valid.
+  defp recover_association_changesets(changeset, association, recover_changeset_errors) do
+    case changeset.changes[association] do
+      nil ->
+        changeset
+
+      children ->
+        # `has_many` and `many_to_many` changes are a list of changesets; `has_one` changes are
+        # a single changeset. `List.wrap/1` normalizes both into a list for recovery, and the
+        # original shape is restored when the changes are updated
+        recovered =
+          children |> List.wrap() |> Enum.map(&recover_changeset(&1, recover_changeset_errors))
+
+        recovered_children = if is_list(children), do: recovered, else: hd(recovered)
+
+        changeset = %{
+          changeset
+          | changes: Map.put(changeset.changes, association, recovered_children)
+        }
+
+        if Enum.all?(recovered, & &1.valid?),
+          do: Map.update!(changeset, :errors, &Keyword.delete(&1, association)),
+          else: changeset
+    end
+  end
+
+  defp recover_changeset_field(changeset, field, recover_to_value) do
+    primary_key_info =
+      changeset.data.__struct__.__schema__(:primary_key)
+      |> Keyword.new(fn primary_key_field ->
+        # The primary key may be absent from the changes (e.g. if the changeset function does
+        # not require it), so avoid `Map.fetch!/2`
+        {primary_key_field, Map.get(changeset.changes, primary_key_field)}
+      end)
+
+    Logger.debug("""
+    Recovered changeset error for struct #{Macro.to_string(changeset.data.__struct__)} with \
+    primary key(s) `#{inspect(primary_key_info)}` in the field `#{field}`.\
+    """)
+
+    %{changeset | changes: Map.put(changeset.changes, field, recover_to_value)}
   end
 
   defp reject_invalid_changesets(schema_module, changesets) do
