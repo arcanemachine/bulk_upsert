@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Breaking:** `bulk_upsert/4` now returns `{:ok, %{upserted: count, skipped: count}}` (counts
   of top-level attrs) instead of `:ok`, making silently skipped invalid rows visible to callers
+- Require `ecto ~> 3.6` (the `:placeholders` option has required Ecto v3.6.0 all along; the
+  previous `~> 3.0` requirement overstated compatibility)
 
 ### Fixed
 

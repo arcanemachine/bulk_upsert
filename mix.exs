@@ -35,7 +35,8 @@ defmodule BulkUpsert.MixProject do
 
   defp deps do
     [
-      {:ecto, "~> 3.0"},
+      # `insert_all`'s `:placeholders` option requires Ecto v3.6.0 or later
+      {:ecto, "~> 3.6"},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
 
       # Used only by the demo app that backs the test suite
