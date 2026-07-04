@@ -98,12 +98,12 @@ defmodule BulkUpsert do
   - `:placeholders` - Set fields from shared values that are sent to the database once instead of
   once per row, using the `:placeholders` feature of Ecto's `insert_all/3`. This option is a map
   whose key is the schema or source being upserted, and the value is a map of `field => value`.
-  The fields are set after changeset validation, so they do not need to appear in the attrs.
-  (Default: `%{}`)
+  The fields do not need to appear in the attrs. (Default: `%{}`)
     - Example: `%{YourProject.Persons.Person => %{inserted_at: DateTime.utc_now()}}`
-    - Placeholder fields bypass the changeset, so they are not cast or validated.
-    - Do not include a placeholder field in the changeset's `validate_required/2`. The value is
-    absent during validation, so the changeset would be invalid and the row would be skipped.
+    - Each placeholder value is injected into the attrs before the changeset is built, so a
+    placeholder field is cast and validated like any other field and may be included in the
+    changeset's `validate_required/2`.
+    - The shared value replaces any per-row value supplied for the field in the attrs.
 
   - `:recover_changeset_errors` - If the given fields in a changeset have errors, then replace
   them with a custom fallback value. (Default: `%{}`)
@@ -200,6 +200,17 @@ defmodule BulkUpsert do
       timeout: Keyword.get(opts, :timeout, @default_timeout)
     }
 
+    attrs_list =
+      if config.placeholders == %{} do
+        attrs_list
+      else
+        # Inject each placeholder value into the attrs before the changeset is built, so a
+        # placeholder field is cast and validated like any other field (and may be included in
+        # `validate_required/2`). The value is swapped for a `{:placeholder, field}` tuple after
+        # validation, in `insert_all_entries/4`
+        Enum.map(attrs_list, &inject_placeholder_values(&1, schema_module, config.placeholders))
+      end
+
     valid_changesets =
       attrs_list
       # Convert to changesets so the data can be validated before upsertion
@@ -227,6 +238,67 @@ defmodule BulkUpsert do
 
     upserted_count = length(valid_changesets)
     {:ok, %{upserted: upserted_count, skipped: length(attrs_list) - upserted_count}}
+  end
+
+  # Inject the placeholder values configured for a schema into an attrs map, recursing into the
+  # attrs of every association that will be upserted. The shared placeholder value replaces any
+  # per-row value for the field.
+  defp inject_placeholder_values(attrs, schema_module, placeholders) do
+    attrs =
+      placeholders
+      |> Map.get(schema_module, %{})
+      |> Enum.reduce(attrs, fn {field, value}, acc -> put_placeholder_attr(acc, field, value) end)
+
+    # Recurse into the associations that are upserted (`has_many`, `has_one`, `many_to_many`)
+    (get_schema_associations(schema_module, :has) ++
+       get_schema_associations(schema_module, :many_to_many))
+    |> Enum.reduce(attrs, fn association, acc ->
+      related_schema_module = schema_module.__schema__(:association, association).related
+
+      update_association_attrs(
+        acc,
+        association,
+        &inject_placeholder_values(&1, related_schema_module, placeholders)
+      )
+    end)
+  end
+
+  # Attrs maps may use string or atom keys, and Ecto's `cast/4` raises on maps that mix both, so
+  # the injected key must match the keys already present.
+  defp put_placeholder_attr(attrs, field, value) do
+    if Enum.any?(Map.keys(attrs), &is_binary/1),
+      do: Map.put(attrs, Atom.to_string(field), value),
+      else: Map.put(attrs, field, value)
+  end
+
+  # Apply `fun` to each attrs map under an association key, if the association is present.
+  # Values that are not attrs maps (or lists of them) are left untouched, so the changeset cast
+  # reports them as errors in the usual way.
+  defp update_association_attrs(attrs, association, fun) do
+    key =
+      cond do
+        Map.has_key?(attrs, association) -> association
+        Map.has_key?(attrs, Atom.to_string(association)) -> Atom.to_string(association)
+        true -> nil
+      end
+
+    if is_nil(key) do
+      attrs
+    else
+      Map.update!(attrs, key, fn
+        children when is_list(children) ->
+          Enum.map(children, fn
+            child when is_map(child) -> fun.(child)
+            not_a_map -> not_a_map
+          end)
+
+        child when is_map(child) ->
+          fun.(child)
+
+        not_attrs ->
+          not_attrs
+      end)
+    end
   end
 
   defp attrs_from_changeset(changeset) do

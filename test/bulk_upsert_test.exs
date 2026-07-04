@@ -235,6 +235,84 @@ defmodule BulkUpsertTest do
     assert Repo.get!(Post, 101).inserted_at == timestamp
   end
 
+  test "allows a placeholder field to be validate_required" do
+    # The authors' required name comes only from the placeholder; the attrs omit it entirely
+    attrs_list = [%{id: 1}, %{id: 2}]
+
+    {:ok, %{upserted: 2, skipped: 0}} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        placeholders: %{Author => %{name: "Anonymous"}}
+      )
+
+    assert Repo.all(from a in Author, select: a.name) == ["Anonymous", "Anonymous"]
+  end
+
+  test "allows a placeholder field on a nested association to be validate_required" do
+    # The posts' required title comes only from the placeholder
+    attrs_list = [
+      %{id: 1, name: "Alice", posts: [%{id: 101, author_id: 1}, %{id: 102, author_id: 1}]}
+    ]
+
+    {:ok, %{upserted: 1, skipped: 0}} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        placeholders: %{Post => %{title: "UNTITLED"}}
+      )
+
+    assert Repo.all(from p in Post, select: p.title) == ["UNTITLED", "UNTITLED"]
+  end
+
+  test "allows a placeholder field on a many_to_many association to be validate_required" do
+    Repo.insert!(%Author{id: 1, name: "Alice"})
+
+    # The tags' required name comes only from the placeholder
+    attrs_list = [%{id: 1, author_id: 1, title: "P1", tags: [%{id: 10}]}]
+
+    {:ok, %{upserted: 1, skipped: 0}} =
+      BulkUpsert.bulk_upsert(Repo, Post, attrs_list, placeholders: %{Tag => %{name: "misc"}})
+
+    assert Repo.get!(Tag, 10).name == "misc"
+    assert Repo.aggregate("posts_tags", :count) == 1
+  end
+
+  test "injects placeholder values into string-keyed attrs" do
+    attrs_list = [
+      %{"id" => 1, "posts" => [%{"id" => 101, "author_id" => 1}]}
+    ]
+
+    {:ok, %{upserted: 1, skipped: 0}} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        placeholders: %{Author => %{name: "Anonymous"}, Post => %{title: "UNTITLED"}}
+      )
+
+    assert Repo.get!(Author, 1).name == "Anonymous"
+    assert Repo.get!(Post, 101).title == "UNTITLED"
+  end
+
+  test "placeholder values replace per-row values in the attrs" do
+    attrs_list = [%{id: 1, name: "Bob"}]
+
+    {:ok, _} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        placeholders: %{Author => %{name: "Anonymous"}}
+      )
+
+    assert Repo.get!(Author, 1).name == "Anonymous"
+  end
+
+  @tag :capture_log
+  test "skips a row whose association attrs cannot be cast when placeholders are configured" do
+    # The uncastable posts value is left untouched by placeholder injection, so the changeset
+    # reports the cast error and the row is skipped in the usual way
+    attrs_list = [%{id: 1, name: "Alice", posts: "garbage"}]
+
+    {:ok, %{upserted: 0, skipped: 1}} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        placeholders: %{Post => %{title: "UNTITLED"}}
+      )
+
+    assert Repo.aggregate(Author, :count) == 0
+  end
+
   test "uses changeset_function_atom when provided" do
     {:ok, _} =
       BulkUpsert.bulk_upsert(Repo, Author, [%{id: 10, name: "ignored"}],

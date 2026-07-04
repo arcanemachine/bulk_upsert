@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Wrap the entire bulk upsert in a single transaction. Previously each chunk of `:chunk_size`
   parents ran in its own transaction, so a failure in a later chunk left earlier chunks committed
+- Placeholder fields can now be included in the changeset's `validate_required/2`. Each
+  placeholder value is injected into the attrs (at every nesting level) before the changeset is
+  built, so the field is cast and validated like any other field. Previously the value was absent
+  during validation, so requiring a placeholder field silently skipped every row
 
 ## v0.2.0 - 2026-05-31
 
