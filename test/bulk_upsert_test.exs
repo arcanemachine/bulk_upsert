@@ -315,4 +315,19 @@ defmodule BulkUpsertTest do
     # The author was upserted before the post failed, but the transaction rolled it back
     assert Repo.aggregate(Author, :count) == 0
   end
+
+  test "rolls back all chunks when a later chunk fails" do
+    # With chunk_size: 1, the first author is upserted in its own chunk before the second
+    # author's post fails its foreign key constraint
+    attrs_list = [
+      %{id: 1, name: "Alice"},
+      %{id: 2, name: "Bob", posts: [%{id: 101, author_id: 999, title: "a"}]}
+    ]
+
+    assert_raise Postgrex.Error, ~r/foreign_key/, fn ->
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list, chunk_size: 1)
+    end
+
+    assert Repo.aggregate(Author, :count) == 0
+  end
 end

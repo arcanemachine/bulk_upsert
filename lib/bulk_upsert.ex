@@ -78,7 +78,8 @@ defmodule BulkUpsert do
   primary key, and any fields specified here. (Default: `[]`)
     - Example: `[:field, :other_field]`
 
-  - `:timeout` - The maximum timeout for a transaction. (Default: `#{@default_timeout}`)
+  - `:timeout` - The maximum timeout for the transaction that wraps the entire bulk upsert (all
+  chunks), also applied to each `insert_all/3` query. (Default: `#{@default_timeout}`)
     - Example: `60_000`
 
   ## Examples
@@ -141,19 +142,31 @@ defmodule BulkUpsert do
     chunk_size = Keyword.get(opts, :chunk_size, 1000)
     recover_changeset_errors = Keyword.get(opts, :recover_changeset_errors, %{})
 
-    attrs_list
-    # Convert to changesets so the data can be validated before upsertion
-    |> Enum.map(fn attrs -> apply(schema_module, changeset_function_atom, [attrs]) end)
-    |> then(&handle_invalid_changesets(schema_module, &1, recover_changeset_errors))
-    # Work around Postgres bulk limits by chunking large payloads
-    |> Enum.chunk_every(chunk_size)
-    # Use `Enum.map/2` instead of `Task.async_stream/2`. (This slightly decreases performance, but
-    # prevents issues when using the Ecto sandbox (i.e. in the `:test` configuration environment)
-    # since other functions may also call `Task.async_stream/2` before calling this function.
-    # These nested async calls cause issues with the sandbox. If the additional performance is
-    # required, the caller may be able to pass in its PID to the `Repo.insert_all/3` opts to work
-    # around this issue, at the cost of additional complexity in the codebase)
-    |> Enum.map(&do_bulk_upsert(repo_module, schema_module, &1, opts))
+    changeset_chunks =
+      attrs_list
+      # Convert to changesets so the data can be validated before upsertion
+      |> Enum.map(fn attrs -> apply(schema_module, changeset_function_atom, [attrs]) end)
+      |> then(&handle_invalid_changesets(schema_module, &1, recover_changeset_errors))
+      # Work around Postgres bulk limits by chunking large payloads
+      |> Enum.chunk_every(chunk_size)
+
+    timeout = Keyword.get(opts, :timeout, @default_timeout)
+
+    # Wrap all bulk upserts in a single transaction so that any failure rolls back all changes
+    # made to every chunk of parents and all of their associations
+    repo_module.transaction(
+      fn ->
+        # Use `Enum.each/2` instead of `Task.async_stream/2`. (This slightly decreases
+        # performance, but prevents issues when using the Ecto sandbox (i.e. in the `:test`
+        # configuration environment) since other functions may also call `Task.async_stream/2`
+        # before calling this function. These nested async calls cause issues with the sandbox.
+        # If the additional performance is required, the caller may be able to pass in its PID to
+        # the `Repo.insert_all/3` opts to work around this issue, at the cost of additional
+        # complexity in the codebase)
+        Enum.each(changeset_chunks, &do_bulk_upsert(repo_module, schema_module, &1, opts))
+      end,
+      timeout: timeout
+    )
 
     :ok
   end
@@ -214,149 +227,141 @@ defmodule BulkUpsert do
       placeholders: placeholders
     }
 
-    # Wrap all bulk upserts in a transaction so that any failures will roll back all changes made
-    # to the parent and all of its associations
-    repo_module.transaction(
-      fn ->
-        # Perform bulk upsert for all parent attrs
-        attrs_list =
-          changesets
-          # Drop all assoc data from the changeset (assocs are handled separately in a later step)
-          |> Enum.map(&drop_association_changes(&1, schema_module))
-          |> Enum.map(&attrs_from_changeset/1)
+    # Perform bulk upsert for all parent attrs
+    attrs_list =
+      changesets
+      # Drop all assoc data from the changeset (assocs are handled separately in a later step)
+      |> Enum.map(&drop_association_changes(&1, schema_module))
+      |> Enum.map(&attrs_from_changeset/1)
 
-        # Build `insert_all` opts for the parent schema
-        parent_insert_all_opts =
-          Keyword.merge(
-            _default_parent_insert_all_opts = [
-              conflict_target: schema_module.__schema__(:primary_key),
-              on_conflict:
-                {:replace_all_except,
-                 schema_module.__schema__(:primary_key) ++ replace_all_except},
-              timeout: timeout
-            ],
-            insert_all_opts[schema_module] || []
-          )
+    # Build `insert_all` opts for the parent schema
+    parent_insert_all_opts =
+      Keyword.merge(
+        _default_parent_insert_all_opts = [
+          conflict_target: schema_module.__schema__(:primary_key),
+          on_conflict:
+            {:replace_all_except, schema_module.__schema__(:primary_key) ++ replace_all_except},
+          timeout: timeout
+        ],
+        insert_all_opts[schema_module] || []
+      )
 
-        insert_all_entries(attrs_list, schema_module, parent_insert_all_opts, insert_all_context)
+    insert_all_entries(attrs_list, schema_module, parent_insert_all_opts, insert_all_context)
 
-        # Perform bulk upsert for all `has_many` and `has_one` associations
-        for association <- get_schema_associations(schema_module, :has) do
-          association_schema_module =
-            schema_module.__changeset__()[association] |> elem(1) |> Map.fetch!(:related)
+    # Perform bulk upsert for all `has_many` and `has_one` associations
+    for association <- get_schema_associations(schema_module, :has) do
+      association_schema_module =
+        schema_module.__changeset__()[association] |> elem(1) |> Map.fetch!(:related)
 
-          association_attrs_list =
-            changesets
-            |> Enum.map(& &1.changes)
-            |> Enum.map(&Map.get(&1, association))
-            # `has_many` changes are a list of changesets; `has_one` changes are a single
-            # changeset; an absent association is `nil`. `List.wrap/1` normalizes each into a
-            # (possibly empty) list, which `flat_map` concatenates.
-            |> Enum.flat_map(&List.wrap/1)
-            |> Enum.map(&drop_association_changes(&1, association_schema_module))
-            |> Enum.map(&attrs_from_changeset/1)
+      association_attrs_list =
+        changesets
+        |> Enum.map(& &1.changes)
+        |> Enum.map(&Map.get(&1, association))
+        # `has_many` changes are a list of changesets; `has_one` changes are a single
+        # changeset; an absent association is `nil`. `List.wrap/1` normalizes each into a
+        # (possibly empty) list, which `flat_map` concatenates.
+        |> Enum.flat_map(&List.wrap/1)
+        |> Enum.map(&drop_association_changes(&1, association_schema_module))
+        |> Enum.map(&attrs_from_changeset/1)
 
-          # Build `insert_all` opts for the association schema
-          association_insert_all_opts =
-            Keyword.merge(
-              _default_association_insert_all_opts = [
-                on_conflict:
-                  {:replace_all_except,
-                   association_schema_module.__schema__(:primary_key) ++ replace_all_except},
-                conflict_target: association_schema_module.__schema__(:primary_key),
-                timeout: timeout
-              ],
-              insert_all_opts[association_schema_module] || []
-            )
+      # Build `insert_all` opts for the association schema
+      association_insert_all_opts =
+        Keyword.merge(
+          _default_association_insert_all_opts = [
+            on_conflict:
+              {:replace_all_except,
+               association_schema_module.__schema__(:primary_key) ++ replace_all_except},
+            conflict_target: association_schema_module.__schema__(:primary_key),
+            timeout: timeout
+          ],
+          insert_all_opts[association_schema_module] || []
+        )
 
-          insert_all_entries(
-            association_attrs_list,
-            association_schema_module,
-            association_insert_all_opts,
-            insert_all_context
-          )
-        end
+      insert_all_entries(
+        association_attrs_list,
+        association_schema_module,
+        association_insert_all_opts,
+        insert_all_context
+      )
+    end
 
-        # Perform bulk upsert for all `many_to_many` associations
-        for association <- get_schema_associations(schema_module, :many_to_many) do
-          %Ecto.Association.ManyToMany{
-            related: related_schema_module,
-            join_through: join_through,
-            join_keys: [{owner_join_key, owner_key}, {related_join_key, related_key}]
-          } = schema_module.__changeset__()[association] |> elem(1)
+    # Perform bulk upsert for all `many_to_many` associations
+    for association <- get_schema_associations(schema_module, :many_to_many) do
+      %Ecto.Association.ManyToMany{
+        related: related_schema_module,
+        join_through: join_through,
+        join_keys: [{owner_join_key, owner_key}, {related_join_key, related_key}]
+      } = schema_module.__changeset__()[association] |> elem(1)
 
-          # Pair each parent's primary key with each of its related changesets, so the related
-          # records and the join rows can both be derived from the same data.
-          parent_related_pairs =
-            Enum.flat_map(changesets, fn parent_changeset ->
-              parent_changeset.changes
-              |> Map.get(association)
-              |> List.wrap()
-              |> Enum.map(fn related_changeset -> {parent_changeset, related_changeset} end)
-            end)
+      # Pair each parent's primary key with each of its related changesets, so the related
+      # records and the join rows can both be derived from the same data.
+      parent_related_pairs =
+        Enum.flat_map(changesets, fn parent_changeset ->
+          parent_changeset.changes
+          |> Map.get(association)
+          |> List.wrap()
+          |> Enum.map(fn related_changeset -> {parent_changeset, related_changeset} end)
+        end)
 
-          # Upsert the related records into their own table. The same record may be referenced by
-          # multiple parents, so duplicates are removed to avoid conflicting twice in one query.
-          related_attrs_list =
-            parent_related_pairs
-            |> Enum.map(fn {_parent_changeset, related_changeset} ->
-              related_changeset
-              |> drop_association_changes(related_schema_module)
-              |> attrs_from_changeset()
-            end)
-            |> Enum.uniq_by(&Map.take(&1, related_schema_module.__schema__(:primary_key)))
+      # Upsert the related records into their own table. The same record may be referenced by
+      # multiple parents, so duplicates are removed to avoid conflicting twice in one query.
+      related_attrs_list =
+        parent_related_pairs
+        |> Enum.map(fn {_parent_changeset, related_changeset} ->
+          related_changeset
+          |> drop_association_changes(related_schema_module)
+          |> attrs_from_changeset()
+        end)
+        |> Enum.uniq_by(&Map.take(&1, related_schema_module.__schema__(:primary_key)))
 
-          related_insert_all_opts =
-            Keyword.merge(
-              [
-                on_conflict:
-                  {:replace_all_except,
-                   related_schema_module.__schema__(:primary_key) ++ replace_all_except},
-                conflict_target: related_schema_module.__schema__(:primary_key),
-                timeout: timeout
-              ],
-              insert_all_opts[related_schema_module] || []
-            )
+      related_insert_all_opts =
+        Keyword.merge(
+          [
+            on_conflict:
+              {:replace_all_except,
+               related_schema_module.__schema__(:primary_key) ++ replace_all_except},
+            conflict_target: related_schema_module.__schema__(:primary_key),
+            timeout: timeout
+          ],
+          insert_all_opts[related_schema_module] || []
+        )
 
-          insert_all_entries(
-            related_attrs_list,
-            related_schema_module,
-            related_insert_all_opts,
-            insert_all_context
-          )
+      insert_all_entries(
+        related_attrs_list,
+        related_schema_module,
+        related_insert_all_opts,
+        insert_all_context
+      )
 
-          # Upsert the join table rows that link each parent to its related records. The same link
-          # may be listed more than once, so duplicate rows are removed for the same reason.
-          join_attrs_list =
-            parent_related_pairs
-            |> Enum.map(fn {parent_changeset, related_changeset} ->
-              %{
-                owner_join_key => Ecto.Changeset.fetch_field!(parent_changeset, owner_key),
-                related_join_key => Ecto.Changeset.fetch_field!(related_changeset, related_key)
-              }
-            end)
-            |> Enum.uniq()
+      # Upsert the join table rows that link each parent to its related records. The same link
+      # may be listed more than once, so duplicate rows are removed for the same reason.
+      join_attrs_list =
+        parent_related_pairs
+        |> Enum.map(fn {parent_changeset, related_changeset} ->
+          %{
+            owner_join_key => Ecto.Changeset.fetch_field!(parent_changeset, owner_key),
+            related_join_key => Ecto.Changeset.fetch_field!(related_changeset, related_key)
+          }
+        end)
+        |> Enum.uniq()
 
-          join_insert_all_opts =
-            Keyword.merge(
-              [
-                on_conflict: :nothing,
-                conflict_target: [owner_join_key, related_join_key],
-                timeout: timeout
-              ],
-              insert_all_opts[join_through] || []
-            )
+      join_insert_all_opts =
+        Keyword.merge(
+          [
+            on_conflict: :nothing,
+            conflict_target: [owner_join_key, related_join_key],
+            timeout: timeout
+          ],
+          insert_all_opts[join_through] || []
+        )
 
-          insert_all_entries(
-            join_attrs_list,
-            join_through,
-            join_insert_all_opts,
-            insert_all_context
-          )
-        end
-      end,
-      timeout: timeout
-    )
+      insert_all_entries(
+        join_attrs_list,
+        join_through,
+        join_insert_all_opts,
+        insert_all_context
+      )
+    end
   end
 
   # Associations are only processed one level deep: a child's own association changes are dropped

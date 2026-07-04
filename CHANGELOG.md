@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Wrap the entire bulk upsert in a single transaction. Previously each chunk of `:chunk_size`
+  parents ran in its own transaction, so a failure in a later chunk left earlier chunks committed
+
 - Drop a child's own nested association changes instead of crashing in `insert_all/3`
   (associations are processed one level deep)
 
