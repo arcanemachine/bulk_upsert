@@ -93,7 +93,7 @@ iex> YourProject.Repo.bulk_upsert(
 ...>   YourProject.Persons.Person,
 ...>   [%{id: 1, name: "Alice"}, %{id: 2, name: "Bob"}]
 ...> )
-:ok
+{:ok, %{upserted: 2, skipped: 0}}
 
 iex> YourProject.Repo.all(YourProject.Persons.Person)
 [
@@ -113,7 +113,7 @@ iex> YourProject.Repo.bulk_upsert(
 ...>   YourProject.Persons.Person,
 ...>   [%{id: 1, name: "Alicia"}, %{id: 2, name: "Bobby"}]
 ...> )
-:ok
+{:ok, %{upserted: 2, skipped: 0}}
 
 iex> YourProject.Repo.all(YourProject.Persons.Person)
 [
@@ -209,7 +209,7 @@ iex> YourProject.Repo.bulk_upsert(
 ...>     ]}
 ...>   ]
 ...> )
-:ok
+{:ok, %{upserted: 2, skipped: 0}}
 
 iex> YourProject.Repo.all(YourProject.Persons.Pet)
 [
@@ -368,7 +368,7 @@ iex> YourProject.Repo.bulk_upsert(
 ...>   YourProject.Persons.Person,
 ...>   [%{id: 1, name: "Alice"}, %{id: 2, name: "Bob"}]
 ...> )
-:ok
+{:ok, %{upserted: 2, skipped: 0}}
 
 iex> YourProject.Repo.all(YourProject.Persons.Person)
 [
@@ -392,7 +392,7 @@ iex> YourProject.Repo.bulk_upsert(
 ...>   YourProject.Persons.Person,
 ...>   [%{id: 1, name: "Alicia"}, %{id: 2, name: "Bobby"}]
 ...> )
-:ok
+{:ok, %{upserted: 2, skipped: 0}}
 
 iex> YourProject.Repo.all(YourProject.Persons.Person)
 [

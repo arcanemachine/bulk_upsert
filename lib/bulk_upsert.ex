@@ -30,7 +30,14 @@ defmodule BulkUpsert do
       ...>     %{id: 2, name: "Bob", age: 35, phone_number: "555-2345"},
       ...>   ]
       ...> )
-      :ok
+      {:ok, %{upserted: 2, skipped: 0}}
+
+  ## Return value
+
+  Returns `{:ok, %{upserted: upserted_count, skipped: skipped_count}}`, where the counts refer to
+  the top-level attrs: `:upserted` is the number of items sent to the database, and `:skipped` is
+  the number of items dropped because their changesets were invalid. (Each skipped item is also
+  logged at the `:debug` level.) A database error rolls back the entire upsert and raises.
 
   ## Options
 
@@ -103,7 +110,7 @@ defmodule BulkUpsert do
       ...>   attrs_list,
       ...>   changeset_function_atom: :upsert_changeset
       ...> )
-      :ok
+      {:ok, %{upserted: 1, skipped: 0}}
 
   Upsert a list of attrs, but overwrite the `:name` field if there is a conflict.
 
@@ -121,7 +128,7 @@ defmodule BulkUpsert do
       ...>   _attrs_list = [%{id: 1, name: "Alicia"}],
       ...>   insert_all_opts: insert_all_opts
       ...> )
-      :ok
+      {:ok, %{upserted: 1, skipped: 0}}
 
   ## Associations
 
@@ -159,13 +166,14 @@ defmodule BulkUpsert do
       timeout: Keyword.get(opts, :timeout, @default_timeout)
     }
 
-    changeset_chunks =
+    valid_changesets =
       attrs_list
       # Convert to changesets so the data can be validated before upsertion
       |> Enum.map(fn attrs -> apply(schema_module, config.changeset_function_atom, [attrs]) end)
       |> then(&handle_invalid_changesets(schema_module, &1, config.recover_changeset_errors))
-      # Work around Postgres bulk limits by chunking large payloads
-      |> Enum.chunk_every(config.chunk_size)
+
+    # Work around Postgres bulk limits by chunking large payloads
+    changeset_chunks = Enum.chunk_every(valid_changesets, config.chunk_size)
 
     # Wrap all bulk upserts in a single transaction so that any failure rolls back all changes
     # made to every chunk of parents and all of their associations
@@ -183,7 +191,8 @@ defmodule BulkUpsert do
       timeout: config.timeout
     )
 
-    :ok
+    upserted_count = length(valid_changesets)
+    {:ok, %{upserted: upserted_count, skipped: length(attrs_list) - upserted_count}}
   end
 
   defp attrs_from_changeset(changeset) do

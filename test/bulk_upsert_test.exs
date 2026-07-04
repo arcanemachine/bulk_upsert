@@ -5,13 +5,13 @@ defmodule BulkUpsertTest do
   alias BulkUpsertDemo.ProxyRepo
 
   test "upserts rows, updating them on conflict" do
-    :ok =
+    {:ok, %{upserted: 2, skipped: 0}} =
       BulkUpsert.bulk_upsert(Repo, Author, [
         %{id: 1, name: "Alice"},
         %{id: 2, name: "Bob"}
       ])
 
-    :ok =
+    {:ok, _} =
       BulkUpsert.bulk_upsert(Repo, Author, [
         %{id: 1, name: "Alicia"},
         %{id: 2, name: "Bobby"}
@@ -25,7 +25,7 @@ defmodule BulkUpsertTest do
 
     attrs_list = Enum.map(1..5, fn id -> %{id: id, name: "author-#{id}"} end)
 
-    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list, chunk_size: 2)
+    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list, chunk_size: 2)
 
     # 5 authors in chunks of 2 -> 3 INSERT queries
     assert count_insert_queries("authors") == 3
@@ -56,7 +56,7 @@ defmodule BulkUpsertTest do
       }
     ]
 
-    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list, chunk_size: 2)
+    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list, chunk_size: 2)
 
     # 6 posts in chunks of 2 -> 3 INSERT queries
     assert count_insert_queries("posts") == 3
@@ -69,7 +69,7 @@ defmodule BulkUpsertTest do
       %{id: 2, name: "Bob", profile: %{id: 102, author_id: 2, bio: "b"}}
     ]
 
-    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
 
     assert Repo.all(from p in Profile, order_by: p.id, select: {p.author_id, p.bio}) ==
              [{1, "a"}, {2, "b"}]
@@ -81,7 +81,7 @@ defmodule BulkUpsertTest do
       %{id: 2, name: "Bob"}
     ]
 
-    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
 
     # Only the author that supplied a profile results in a profile row
     assert Repo.all(from p in Profile, select: p.id) == [101]
@@ -101,7 +101,7 @@ defmodule BulkUpsertTest do
       }
     ]
 
-    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
 
     author = Repo.get!(Author, 1)
     assert author.address == %Address{street: "1 Main St", city: "Springfield"}
@@ -126,7 +126,7 @@ defmodule BulkUpsertTest do
       %{id: 2, author_id: 1, title: "P2", tags: [%{id: 10, name: "elixir"}]}
     ]
 
-    :ok = BulkUpsert.bulk_upsert(Repo, Post, attrs_list)
+    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Post, attrs_list)
 
     assert Repo.all(from t in Tag, order_by: t.id, select: {t.id, t.name}) ==
              [{10, "elixir"}, {11, "ecto"}]
@@ -139,7 +139,7 @@ defmodule BulkUpsertTest do
     assert join_rows == [{1, 10}, {1, 11}, {2, 10}]
 
     # Upserting the same attrs again is idempotent (relies on the join table's unique index)
-    :ok = BulkUpsert.bulk_upsert(Repo, Post, attrs_list)
+    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Post, attrs_list)
     assert Repo.aggregate("posts_tags", :count) == 3
   end
 
@@ -158,7 +158,7 @@ defmodule BulkUpsertTest do
       }
     ]
 
-    :ok = BulkUpsert.bulk_upsert(Repo, Post, attrs_list)
+    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Post, attrs_list)
 
     # The foreign key is set on the post, but the nested category data is never upserted
     assert Repo.get!(Post, 1).category_id == 5
@@ -175,7 +175,7 @@ defmodule BulkUpsertTest do
       }
     ]
 
-    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
 
     assert Repo.get!(Post, 101).title == "a"
     assert Repo.aggregate(Tag, :count) == 0
@@ -188,7 +188,7 @@ defmodule BulkUpsertTest do
       %{id: 1, name: "Alice", posts: [%{id: 101, author_id: 1, title: "a"}]}
     ]
 
-    :ok =
+    {:ok, _} =
       BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
         placeholders: %{
           Author => %{inserted_at: timestamp},
@@ -201,7 +201,7 @@ defmodule BulkUpsertTest do
   end
 
   test "uses changeset_function_atom when provided" do
-    :ok =
+    {:ok, _} =
       BulkUpsert.bulk_upsert(Repo, Author, [%{id: 10, name: "ignored"}],
         changeset_function_atom: :upsert_changeset
       )
@@ -211,13 +211,13 @@ defmodule BulkUpsertTest do
   end
 
   @tag :capture_log
-  test "rejects invalid changesets" do
+  test "rejects invalid changesets and reports them as skipped" do
     attrs_list = [
       %{id: 1, name: "valid"},
       %{id: 2}
     ]
 
-    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+    assert {:ok, %{upserted: 1, skipped: 1}} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
 
     assert Repo.all(from a in Author, select: {a.id, a.name}) == [{1, "valid"}]
   end
@@ -226,7 +226,7 @@ defmodule BulkUpsertTest do
   test "recovers configured changeset errors before upsert" do
     attrs_list = [%{id: 1, name: "Alice", phone_number: "INVALID"}]
 
-    :ok =
+    {:ok, _} =
       BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
         recover_changeset_errors: %{Author => %{phone_number: "555-1234"}}
       )
@@ -244,13 +244,13 @@ defmodule BulkUpsertTest do
       %{id: 1, name: "Alice", posts: [%{id: 101, author_id: 1, title: "a"}]}
     ]
 
-    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list, insert_all_opts: insert_all_opts)
+    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list, insert_all_opts: insert_all_opts)
 
     updated_attrs_list = [
       %{id: 1, name: "Alicia", posts: [%{id: 101, author_id: 1, title: "b"}]}
     ]
 
-    :ok =
+    {:ok, _} =
       BulkUpsert.bulk_upsert(Repo, Author, updated_attrs_list, insert_all_opts: insert_all_opts)
 
     # The author conflict did nothing, while the post conflict replaced the title
@@ -259,10 +259,10 @@ defmodule BulkUpsertTest do
   end
 
   test "replace_all_except preserves the given fields on conflict" do
-    :ok =
+    {:ok, _} =
       BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice", phone_number: "555-1234"}])
 
-    :ok =
+    {:ok, _} =
       BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alicia", phone_number: "555-9999"}],
         replace_all_except: [:name]
       )
@@ -277,7 +277,7 @@ defmodule BulkUpsertTest do
       %{id: 1, name: "Alice", posts: [%{id: 101, author_id: 1, title: "a"}]}
     ]
 
-    :ok =
+    {:ok, _} =
       BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
         insert_all_function_atom: :insert_all_with_autogenerated_timestamps
       )
@@ -288,7 +288,7 @@ defmodule BulkUpsertTest do
   end
 
   test "uses insert_all_function_module when provided, passing conflict opts and timeout" do
-    :ok =
+    {:ok, _} =
       BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}],
         insert_all_function_module: ProxyRepo,
         timeout: 45_000

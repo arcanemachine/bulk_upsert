@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **Breaking:** `bulk_upsert/4` now returns `{:ok, %{upserted: count, skipped: count}}` (counts
+  of top-level attrs) instead of `:ok`, making silently skipped invalid rows visible to callers
+
 ### Fixed
 
 - Wrap the entire bulk upsert in a single transaction. Previously each chunk of `:chunk_size`
