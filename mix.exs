@@ -3,7 +3,7 @@ defmodule BulkUpsert.MixProject do
 
   @project_name "Bulk Upsert"
   @source_url "https://github.com/arcanemachine/bulk_upsert"
-  @version "0.2.0"
+  @version "0.3.0"
 
   def project do
     [
@@ -65,7 +65,8 @@ defmodule BulkUpsert.MixProject do
         "CHANGELOG.md": [title: "Changelog"]
       ],
       formatters: ["html"],
-      main: "readme"
+      main: "readme",
+      source_ref: "v#{@version}"
     ]
   end
 

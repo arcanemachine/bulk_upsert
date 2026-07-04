@@ -1,9 +1,10 @@
 # BulkUpsert
 
-> #### Warning
+> #### Note
 >
-> This is a very early release. It works but has some rough edges, and shouldn't be considered
-> production-ready for most use cases.
+> This library is pre-1.0: the API may change between minor versions (see the changelog).
+> The test suite exercises it against a real Postgres database, but review the documented
+> limitations before using it in production.
 
 Upsert multiple Ecto schema structs, along with their nested associations, to the database with a single function call.
 
@@ -29,7 +30,7 @@ Add this package to your list of dependencies in `mix.exs`, then run `mix deps.g
 ```elixir
 def deps do
   [
-    {:bulk_upsert, "~> 0.2"}
+    {:bulk_upsert, "~> 0.3"}
   ]
 end
 ```
