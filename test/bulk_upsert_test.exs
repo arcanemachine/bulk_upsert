@@ -479,14 +479,51 @@ defmodule BulkUpsertTest do
   end
 
   @tag :capture_log
-  test "does not recover errors in embedded schemas" do
-    # The address is missing its required city. Embedded changesets are never recovered, even
-    # with a fallback configured for the embedded schema
+  test "recovers changeset errors in an embeds_one changeset" do
+    # The address is missing its required city
+    attrs_list = [%{id: 1, name: "Alice", address: %{street: "1 Main St"}}]
+
+    {:ok, %{upserted: 1, skipped: 0}} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        recover_changeset_errors: %{Address => %{city: "Springfield"}}
+      )
+
+    assert Repo.get!(Author, 1).address == %Address{street: "1 Main St", city: "Springfield"}
+  end
+
+  @tag :capture_log
+  test "recovers changeset errors in an embeds_many changeset" do
+    # The second social link is missing its required url
+    attrs_list = [
+      %{
+        id: 1,
+        name: "Alice",
+        social_links: [
+          %{label: "website", url: "https://example.com"},
+          %{label: "mastodon"}
+        ]
+      }
+    ]
+
+    {:ok, %{upserted: 1, skipped: 0}} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        recover_changeset_errors: %{SocialLink => %{url: "https://example.com/unknown"}}
+      )
+
+    assert Repo.get!(Author, 1).social_links == [
+             %SocialLink{label: "website", url: "https://example.com"},
+             %SocialLink{label: "mastodon", url: "https://example.com/unknown"}
+           ]
+  end
+
+  @tag :capture_log
+  test "skips the row when an embedded changeset error has no fallback" do
+    # The address is missing its required city, and only :street has a fallback configured
     attrs_list = [%{id: 1, name: "Alice", address: %{street: "1 Main St"}}]
 
     {:ok, %{upserted: 0, skipped: 1}} =
       BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
-        recover_changeset_errors: %{Address => %{city: "Springfield"}}
+        recover_changeset_errors: %{Address => %{street: "unknown"}}
       )
 
     assert Repo.aggregate(Author, :count) == 0

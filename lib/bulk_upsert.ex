@@ -104,19 +104,22 @@ defmodule BulkUpsert do
     placeholder field is cast and validated like any other field and may be included in the
     changeset's `validate_required/2`.
     - The shared value replaces any per-row value supplied for the field in the attrs.
+    - Embedded schemas are stored inline on their parent row and are never upserted as their own
+    source, so placeholder values keyed by an embedded schema module are ignored.
 
   - `:recover_changeset_errors` - If the given fields in a changeset have errors, then replace
   them with a custom fallback value. (Default: `%{}`)
     - Example: `%{YourProject.Persons.Person => %{phone_number: "INVALID"}}`
-    - Applies recursively to nested association changesets, with fallbacks looked up by each
-    changeset's schema. A parent's association error is cleared once all of that association's
-    child changesets have been recovered.
+    - Applies recursively to nested association and embedded changesets, with fallbacks looked
+    up by each changeset's schema (for embeds, the embedded schema module). A parent's
+    association error is cleared once all of that association's child changesets have been
+    recovered.
     - A changeset is only recovered if every one of its error fields has a fallback and every
     nested changeset is recoverable by the same rule; otherwise the row is skipped.
     - A fallback value is applied without re-running the changeset function, so it must be valid
     for the schema.
-    - Errors on embedded schemas and on the association fields themselves (e.g. an association
-    whose attrs could not be cast at all) are never recoverable.
+    - Errors on the association and embed fields themselves (e.g. an association whose attrs
+    could not be cast at all) are never recoverable.
 
   - `:replace_all_except` - If a row already exists, then all fields will be replaced except the
   primary key, and any fields specified here. (Default: `[]`)
@@ -558,12 +561,12 @@ defmodule BulkUpsert do
   defp recover_changeset(changeset, recover_changeset_errors) do
     schema_module = changeset.data.__struct__
 
-    # Recover the nested association changesets before the changeset's own errors, since an
-    # association error can only be cleared once all of its child changesets are valid
+    # Recover the nested association and embed changesets before the changeset's own errors,
+    # since a nested error can only be cleared once all of its child changesets are valid
     changeset =
-      schema_module.__schema__(:associations)
+      (schema_module.__schema__(:associations) ++ schema_module.__schema__(:embeds))
       |> Enum.reduce(changeset, fn association, acc_changeset ->
-        recover_association_changesets(acc_changeset, association, recover_changeset_errors)
+        recover_nested_changesets(acc_changeset, association, recover_changeset_errors)
       end)
 
     fallbacks = Map.get(recover_changeset_errors, schema_module, %{})
@@ -599,9 +602,9 @@ defmodule BulkUpsert do
     end
   end
 
-  # Check that every changeset in the association and embed changes is valid. Embedded
-  # changesets are never recovered, so an invalid embed permanently blocks recovery of its
-  # parent.
+  # Check that every changeset in the association and embed changes is valid. An invalid child
+  # does not always leave an error entry on its parent, so the parent's error list alone cannot
+  # prove that all children have been recovered.
   defp nested_changesets_valid?(changeset, schema_module) do
     (schema_module.__schema__(:associations) ++ schema_module.__schema__(:embeds))
     |> Enum.all?(fn association ->
@@ -615,17 +618,18 @@ defmodule BulkUpsert do
     end)
   end
 
-  # Recover the changesets in one association's changes, clearing the association's error on the
-  # parent once every child changeset is valid.
-  defp recover_association_changesets(changeset, association, recover_changeset_errors) do
+  # Recover the changesets in one association's (or embed's) changes, clearing the association's
+  # error on the parent once every child changeset is valid.
+  defp recover_nested_changesets(changeset, association, recover_changeset_errors) do
     case changeset.changes[association] do
       nil ->
         changeset
 
       children ->
-        # `has_many` and `many_to_many` changes are a list of changesets; `has_one` changes are
-        # a single changeset. `List.wrap/1` normalizes both into a list for recovery, and the
-        # original shape is restored when the changes are updated
+        # `has_many`, `many_to_many`, and `embeds_many` changes are a list of changesets;
+        # `has_one` and `embeds_one` changes are a single changeset. `List.wrap/1` normalizes
+        # both into a list for recovery, and the original shape is restored when the changes are
+        # updated
         recovered =
           children |> List.wrap() |> Enum.map(&recover_changeset(&1, recover_changeset_errors))
 

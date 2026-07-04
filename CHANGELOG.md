@@ -11,9 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Nested associations are now upserted recursively at any depth (previously only the parent's
   direct associations were handled, and a child carrying its own nested associations crashed)
-- `:recover_changeset_errors` now applies recursively to nested association changesets, with
-  fallbacks looked up by each changeset's schema (previously only the parent schema's changesets
-  were recovered, and any nested error caused the row to be skipped)
+- `:recover_changeset_errors` now applies recursively to nested association and embedded
+  changesets, with fallbacks looked up by each changeset's schema (previously only the parent
+  schema's changesets were recovered, and any nested error caused the row to be skipped)
 
 ### Changed
 
