@@ -5,6 +5,26 @@ defmodule BulkUpsert do
 
   @default_timeout 15_000
 
+  @typedoc """
+  Options accepted by `bulk_upsert/4`. See that function's documentation for details.
+
+  Map keys typed `module() | Ecto.Schema.source()` accept a schema module or, for
+  `many_to_many` join tables, the source as a string (e.g. `"persons_topics"`).
+  """
+  @type options :: [
+          changeset_function_atom: atom(),
+          chunk_size: pos_integer(),
+          insert_all_function_module: module(),
+          insert_all_function_atom: atom(),
+          insert_all_opts: %{optional(module() | Ecto.Schema.source()) => Keyword.t()},
+          placeholders: %{
+            optional(module() | Ecto.Schema.source()) => %{optional(atom()) => term()}
+          },
+          recover_changeset_errors: %{optional(module()) => %{optional(atom()) => term()}},
+          replace_all_except: [atom()],
+          timeout: timeout()
+        ]
+
   @doc """
   Validate a list of attrs maps (`attrs_list`) by passing them through an Ecto changeset,
   then upsert the valid items to the database that corresponds to a given Ecto `repo_module` (e.g.
@@ -157,6 +177,8 @@ defmodule BulkUpsert do
   include its foreign key field in the attrs (e.g. `category_id`). This applies at every level of
   nesting.
   """
+  @spec bulk_upsert(module(), module(), [map()], options()) ::
+          {:ok, %{upserted: non_neg_integer(), skipped: non_neg_integer()}}
   def bulk_upsert(repo_module, schema_module, attrs_list, opts \\ []) do
     # Parse all options once; `config` is threaded through every helper below
     config = %{
