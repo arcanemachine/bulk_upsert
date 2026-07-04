@@ -12,6 +12,8 @@ defmodule BulkUpsertDemo.Blog.Post do
 
     belongs_to :category, BulkUpsertDemo.Blog.Category, type: :integer
 
+    has_many :comments, BulkUpsertDemo.Blog.Comment
+
     many_to_many :tags, BulkUpsertDemo.Blog.Tag,
       join_through: "posts_tags",
       join_keys: [post_id: :id, tag_id: :id]
@@ -22,6 +24,7 @@ defmodule BulkUpsertDemo.Blog.Post do
     |> cast(attrs, [:id, :author_id, :category_id, :title])
     |> validate_required([:id, :author_id, :title])
     |> cast_assoc(:category)
+    |> cast_assoc(:comments)
     |> cast_assoc(:tags)
   end
 end

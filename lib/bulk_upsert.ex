@@ -132,7 +132,8 @@ defmodule BulkUpsert do
 
   ## Associations
 
-  Nested associations are upserted in the same call as the parent:
+  Nested associations are upserted in the same call as the parent, recursively: a child's own
+  nested associations (at any depth) are upserted the same way as the parent's.
 
   - `has_many` and `has_one`: the associated records are upserted into their own table. Each child
   must include its foreign key in its attrs, since it is upserted directly via `insert_all/3`.
@@ -147,10 +148,8 @@ defmodule BulkUpsert do
   ## Known limitations
 
   - Nested `belongs_to` associations are not upserted. To associate with a `belongs_to` parent,
-  include its foreign key field in the attrs (e.g. `category_id`).
-
-  - Associations are processed one level deep. A child's own nested associations are dropped
-  rather than upserted (embedded data on a child is still stored inline on the child's row).
+  include its foreign key field in the attrs (e.g. `category_id`). This applies at every level of
+  nesting.
   """
   def bulk_upsert(repo_module, schema_module, attrs_list, opts \\ []) do
     # Parse all options once; `config` is threaded through every helper below
@@ -264,7 +263,7 @@ defmodule BulkUpsert do
       association_schema_module =
         schema_module.__changeset__()[association] |> elem(1) |> Map.fetch!(:related)
 
-      association_attrs_list =
+      association_changesets =
         changesets
         |> Enum.map(& &1.changes)
         |> Enum.map(&Map.get(&1, association))
@@ -272,28 +271,9 @@ defmodule BulkUpsert do
         # changeset; an absent association is `nil`. `List.wrap/1` normalizes each into a
         # (possibly empty) list, which `flat_map` concatenates.
         |> Enum.flat_map(&List.wrap/1)
-        |> Enum.map(&drop_association_changes(&1, association_schema_module))
-        |> Enum.map(&attrs_from_changeset/1)
 
-      # Build `insert_all` opts for the association schema
-      association_insert_all_opts =
-        Keyword.merge(
-          _default_association_insert_all_opts = [
-            on_conflict:
-              {:replace_all_except,
-               association_schema_module.__schema__(:primary_key) ++ replace_all_except},
-            conflict_target: association_schema_module.__schema__(:primary_key),
-            timeout: timeout
-          ],
-          insert_all_opts[association_schema_module] || []
-        )
-
-      insert_all_entries(
-        association_attrs_list,
-        association_schema_module,
-        association_insert_all_opts,
-        config
-      )
+      # Recurse so each child's own nested associations are upserted as well
+      do_bulk_upsert(association_schema_module, association_changesets, config)
     end
 
     # Perform bulk upsert for all `many_to_many` associations
@@ -316,33 +296,16 @@ defmodule BulkUpsert do
 
       # Upsert the related records into their own table. The same record may be referenced by
       # multiple parents, so duplicates are removed to avoid conflicting twice in one query.
-      related_attrs_list =
+      related_changesets =
         parent_related_pairs
-        |> Enum.map(fn {_parent_changeset, related_changeset} ->
-          related_changeset
-          |> drop_association_changes(related_schema_module)
-          |> attrs_from_changeset()
+        |> Enum.map(fn {_parent_changeset, related_changeset} -> related_changeset end)
+        |> Enum.uniq_by(fn related_changeset ->
+          related_schema_module.__schema__(:primary_key)
+          |> Enum.map(&Ecto.Changeset.get_field(related_changeset, &1))
         end)
-        |> Enum.uniq_by(&Map.take(&1, related_schema_module.__schema__(:primary_key)))
 
-      related_insert_all_opts =
-        Keyword.merge(
-          [
-            on_conflict:
-              {:replace_all_except,
-               related_schema_module.__schema__(:primary_key) ++ replace_all_except},
-            conflict_target: related_schema_module.__schema__(:primary_key),
-            timeout: timeout
-          ],
-          insert_all_opts[related_schema_module] || []
-        )
-
-      insert_all_entries(
-        related_attrs_list,
-        related_schema_module,
-        related_insert_all_opts,
-        config
-      )
+      # Recurse so each related record's own nested associations are upserted as well
+      do_bulk_upsert(related_schema_module, related_changesets, config)
 
       # Upsert the join table rows that link each parent to its related records. The same link
       # may be listed more than once, so duplicate rows are removed for the same reason.
@@ -375,8 +338,8 @@ defmodule BulkUpsert do
     end
   end
 
-  # Associations are only processed one level deep: a child's own association changes are dropped
-  # before the child is upserted (they cannot pass through `insert_all/3`).
+  # Association changes cannot pass through `insert_all/3`, so they are dropped from the row's
+  # own upsert. (They are upserted separately, by recursing into each association's changesets.)
   defp drop_association_changes(%Ecto.Changeset{} = changeset, schema_module) do
     Map.update!(changeset, :changes, &Map.drop(&1, schema_module.__schema__(:associations)))
   end

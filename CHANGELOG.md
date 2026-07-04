@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Nested associations are now upserted recursively at any depth (previously only the parent's
+  direct associations were handled, and a child carrying its own nested associations crashed)
+
 ### Changed
 
 - **Breaking:** `bulk_upsert/4` now returns `{:ok, %{upserted: count, skipped: count}}` (counts
@@ -16,9 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Wrap the entire bulk upsert in a single transaction. Previously each chunk of `:chunk_size`
   parents ran in its own transaction, so a failure in a later chunk left earlier chunks committed
-
-- Drop a child's own nested association changes instead of crashing in `insert_all/3`
-  (associations are processed one level deep)
 
 ## v0.2.0 - 2026-05-31
 

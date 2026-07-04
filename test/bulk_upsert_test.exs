@@ -1,7 +1,7 @@
 defmodule BulkUpsertTest do
   use BulkUpsertDemo.DataCase, async: true
 
-  alias BulkUpsertDemo.Blog.{Address, Author, Category, Post, Profile, SocialLink, Tag}
+  alias BulkUpsertDemo.Blog.{Address, Author, Category, Comment, Post, Profile, SocialLink, Tag}
   alias BulkUpsertDemo.ProxyRepo
 
   test "upserts rows, updating them on conflict" do
@@ -165,20 +165,55 @@ defmodule BulkUpsertTest do
     assert Repo.all(from c in Category, select: {c.id, c.name}) == [{5, "books"}]
   end
 
-  test "drops a child's own nested associations instead of upserting them" do
-    # The posts carry their own nested tags, which are one level too deep to be upserted
+  test "upserts nested associations recursively (has_many -> has_many)" do
+    # Comments hang two levels below the author (author -> posts -> comments)
     attrs_list = [
       %{
         id: 1,
         name: "Alice",
-        posts: [%{id: 101, author_id: 1, title: "a", tags: [%{id: 10, name: "elixir"}]}]
+        posts: [
+          %{
+            id: 101,
+            author_id: 1,
+            title: "a",
+            comments: [
+              %{id: 1001, post_id: 101, body: "first"},
+              %{id: 1002, post_id: 101, body: "second"}
+            ]
+          }
+        ]
       }
     ]
 
     {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
 
-    assert Repo.get!(Post, 101).title == "a"
-    assert Repo.aggregate(Tag, :count) == 0
+    assert Repo.all(from c in Comment, order_by: c.id, select: {c.post_id, c.body}) ==
+             [{101, "first"}, {101, "second"}]
+  end
+
+  test "upserts nested associations recursively (has_many -> many_to_many)" do
+    # The posts' tags hang two levels below the author, with tag 10 shared between posts
+    attrs_list = [
+      %{
+        id: 1,
+        name: "Alice",
+        posts: [
+          %{id: 101, author_id: 1, title: "a", tags: [%{id: 10, name: "elixir"}]},
+          %{id: 102, author_id: 1, title: "b", tags: [%{id: 10, name: "elixir"}]}
+        ]
+      }
+    ]
+
+    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+
+    assert Repo.all(from t in Tag, select: {t.id, t.name}) == [{10, "elixir"}]
+
+    join_rows =
+      Repo.all(
+        from j in "posts_tags", order_by: [j.post_id, j.tag_id], select: {j.post_id, j.tag_id}
+      )
+
+    assert join_rows == [{101, 10}, {102, 10}]
   end
 
   test "sets placeholder fields on parent and association rows" do
