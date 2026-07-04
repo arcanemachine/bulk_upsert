@@ -34,6 +34,12 @@ defmodule BulkUpsert do
 
   ## Options
 
+  > #### Warning {: .warning}
+  >
+  > The `:changeset_function_atom`, `:insert_all_function_module`, and `:insert_all_function_atom`
+  > options are invoked via `apply/3`. Never build these option values from untrusted (e.g.
+  > user-supplied) input.
+
   - `:changeset_function_atom` - The name of the changeset function to apply for the given
   `schema_module`. It is called with one argument: the attrs map. (Default: `:changeset`)
 
@@ -73,6 +79,8 @@ defmodule BulkUpsert do
   - `:recover_changeset_errors` - If the given fields in a changeset have errors, then replace
   them with a custom fallback value. (Default: `%{}`)
     - Example: `%{YourProject.Persons.Person => %{phone_number: "INVALID"}}`
+    - Only applies to the parent schema's changesets. Errors in nested association changesets are
+    not recovered (the parent changeset remains invalid and the row is skipped).
 
   - `:replace_all_except` - If a row already exists, then all fields will be replaced except the
   primary key, and any fields specified here. (Default: `[]`)
