@@ -511,7 +511,9 @@ defmodule BulkUpsert do
                 primary_key_info =
                   acc_changeset.data.__struct__.__schema__(:primary_key)
                   |> Keyword.new(fn primary_key_field ->
-                    {primary_key_field, Map.fetch!(acc_changeset.changes, primary_key_field)}
+                    # The primary key may be absent from the changes (e.g. if the changeset
+                    # function does not require it), so avoid `Map.fetch!/2`
+                    {primary_key_field, Map.get(acc_changeset.changes, primary_key_field)}
                   end)
 
                 struct_name = Macro.to_string(acc_changeset.data.__struct__)
