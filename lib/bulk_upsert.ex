@@ -72,6 +72,8 @@ defmodule BulkUpsert do
   except for the primary key(s) and the insert timestamp. (Default: `%{}`)
     - Example: `%{YourProject.Persons.Person => [on_conflict: {:nothing}]}`
     - A `many_to_many` join table is keyed by its source, e.g. `%{"persons_topics" => [...]}`.
+    - `:conflict_target` defaults to the schema's primary key, so a schema without a primary key
+    must supply its own `:conflict_target` here (otherwise the upsert fails at the database).
 
   - `:placeholders` - Set fields from shared values that are sent to the database once instead of
   once per row, using the `:placeholders` feature of Ecto's `insert_all/3`. This option is a map
@@ -134,6 +136,10 @@ defmodule BulkUpsert do
 
   Nested associations are upserted in the same call as the parent, recursively: a child's own
   nested associations (at any depth) are upserted the same way as the parent's.
+
+  This is an upsert-only operation: rows absent from the attrs are left untouched at every level.
+  Unlike `Ecto.Changeset.cast_assoc/3`'s `:on_replace` behavior, absent children are never
+  deleted or nilified.
 
   - `has_many` and `has_one`: the associated records are upserted into their own table. Each child
   must include its foreign key in its attrs, since it is upserted directly via `insert_all/3`.
