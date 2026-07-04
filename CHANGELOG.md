@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of top-level attrs) instead of `:ok`, making silently skipped invalid rows visible to callers
 - Require `ecto ~> 3.6` (the `:placeholders` option has required Ecto v3.6.0 all along; the
   previous `~> 3.0` requirement overstated compatibility)
+- Skipped rows are now logged at the `:warning` level instead of `:debug`, since silently
+  dropping invalid rows is data loss
 
 ### Fixed
 

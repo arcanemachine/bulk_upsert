@@ -37,7 +37,7 @@ defmodule BulkUpsert do
   Returns `{:ok, %{upserted: upserted_count, skipped: skipped_count}}`, where the counts refer to
   the top-level attrs: `:upserted` is the number of items sent to the database, and `:skipped` is
   the number of items dropped because their changesets were invalid. (Each skipped item is also
-  logged at the `:debug` level.) A database error rolls back the entire upsert and raises.
+  logged at the `:warning` level.) A database error rolls back the entire upsert and raises.
 
   ## Options
 
@@ -423,7 +423,7 @@ defmodule BulkUpsert do
 
     invalid_attrs = Map.merge(invalid_parent_attrs, invalid_association_attrs)
 
-    Logger.debug(
+    Logger.warning(
       """
       This changeset has one or more unrecoverable errors. The item associated with this \
       changeset will not be upserted.\
