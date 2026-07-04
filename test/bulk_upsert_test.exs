@@ -1,561 +1,197 @@
 defmodule BulkUpsertTest do
-  use ExUnit.Case, async: false
+  use BulkUpsertDemo.DataCase, async: true
 
-  defmodule RepoStub do
-    def transaction(fun, _opts), do: fun.()
-  end
+  alias BulkUpsertDemo.Blog.{Address, Author, Category, Post, Profile, SocialLink, Tag}
+  alias BulkUpsertDemo.ProxyRepo
 
-  defmodule InsertAllSpy do
-    use Agent
+  test "upserts rows, updating them on conflict" do
+    :ok =
+      BulkUpsert.bulk_upsert(Repo, Author, [
+        %{id: 1, name: "Alice"},
+        %{id: 2, name: "Bob"}
+      ])
 
-    def start_link(_opts), do: Agent.start_link(fn -> [] end, name: __MODULE__)
+    :ok =
+      BulkUpsert.bulk_upsert(Repo, Author, [
+        %{id: 1, name: "Alicia"},
+        %{id: 2, name: "Bobby"}
+      ])
 
-    def clear, do: Agent.update(__MODULE__, fn _ -> [] end)
-
-    def insert_all(schema_module, attrs_list, opts) do
-      Agent.update(__MODULE__, &[{:insert_all, schema_module, attrs_list, opts} | &1])
-      {length(attrs_list), nil}
-    end
-
-    def custom_insert_all(schema_module, attrs_list, opts) do
-      Agent.update(__MODULE__, &[{:custom_insert_all, schema_module, attrs_list, opts} | &1])
-      {length(attrs_list), nil}
-    end
-
-    def calls, do: Agent.get(__MODULE__, &Enum.reverse/1)
-  end
-
-  defmodule Child do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key {:id, :integer, autogenerate: false}
-    schema "children" do
-      field :parent_id, :integer
-      field :value, :string
-    end
-
-    def changeset(attrs), do: changeset(%__MODULE__{}, attrs)
-
-    def changeset(struct, attrs) do
-      struct
-      |> cast(attrs, [:id, :parent_id, :value])
-      |> validate_required([:id, :parent_id, :value])
-    end
-  end
-
-  defmodule Parent do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key {:id, :integer, autogenerate: false}
-    schema "parents" do
-      field :name, :string
-      has_many :children, Child
-    end
-
-    def changeset(attrs) do
-      %__MODULE__{}
-      |> cast(attrs, [:id, :name])
-      |> validate_required([:id, :name])
-      |> cast_assoc(:children)
-    end
-  end
-
-  defmodule Profile do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key {:id, :integer, autogenerate: false}
-    schema "profiles" do
-      field :parent_id, :integer
-      field :bio, :string
-    end
-
-    def changeset(attrs), do: changeset(%__MODULE__{}, attrs)
-
-    def changeset(struct, attrs) do
-      struct
-      |> cast(attrs, [:id, :parent_id, :bio])
-      |> validate_required([:id, :parent_id, :bio])
-    end
-  end
-
-  defmodule ParentWithProfile do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key {:id, :integer, autogenerate: false}
-    schema "parents_with_profile" do
-      field :name, :string
-      has_one :profile, Profile, foreign_key: :parent_id
-    end
-
-    def changeset(attrs) do
-      %__MODULE__{}
-      |> cast(attrs, [:id, :name])
-      |> validate_required([:id, :name])
-      |> cast_assoc(:profile)
-    end
-  end
-
-  defmodule Address do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key false
-    embedded_schema do
-      field :street, :string
-      field :city, :string
-    end
-
-    def changeset(struct, attrs) do
-      struct
-      |> cast(attrs, [:street, :city])
-      |> validate_required([:street, :city])
-    end
-  end
-
-  defmodule Tag do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key false
-    embedded_schema do
-      field :label, :string
-    end
-
-    def changeset(struct, attrs) do
-      struct
-      |> cast(attrs, [:label])
-      |> validate_required([:label])
-    end
-  end
-
-  defmodule ParentWithEmbeds do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key {:id, :integer, autogenerate: false}
-    schema "parents_with_embeds" do
-      field :name, :string
-      embeds_one :address, Address
-      embeds_many :tags, Tag
-    end
-
-    def changeset(attrs) do
-      %__MODULE__{}
-      |> cast(attrs, [:id, :name])
-      |> validate_required([:id, :name])
-      |> cast_embed(:address)
-      |> cast_embed(:tags)
-    end
-  end
-
-  defmodule Topic do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key {:id, :integer, autogenerate: false}
-    schema "topics" do
-      field :name, :string
-    end
-
-    def changeset(attrs), do: changeset(%__MODULE__{}, attrs)
-
-    def changeset(struct, attrs) do
-      struct
-      |> cast(attrs, [:id, :name])
-      |> validate_required([:id, :name])
-    end
-  end
-
-  defmodule ParentWithTopics do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key {:id, :integer, autogenerate: false}
-    schema "parents_with_topics" do
-      field :name, :string
-
-      many_to_many :topics, Topic,
-        join_through: "parents_topics",
-        join_keys: [parent_id: :id, topic_id: :id]
-    end
-
-    def changeset(attrs) do
-      %__MODULE__{}
-      |> cast(attrs, [:id, :name])
-      |> validate_required([:id, :name])
-      |> cast_assoc(:topics)
-    end
-  end
-
-  defmodule Category do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key {:id, :integer, autogenerate: false}
-    schema "categories" do
-      field :name, :string
-    end
-
-    def changeset(attrs), do: changeset(%__MODULE__{}, attrs)
-
-    def changeset(struct, attrs) do
-      struct
-      |> cast(attrs, [:id, :name])
-      |> validate_required([:id, :name])
-    end
-  end
-
-  defmodule ParentWithCategory do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key {:id, :integer, autogenerate: false}
-    schema "parents_with_category" do
-      field :name, :string
-      belongs_to :category, Category, type: :integer
-    end
-
-    def changeset(attrs) do
-      %__MODULE__{}
-      |> cast(attrs, [:id, :name, :category_id])
-      |> validate_required([:id, :name])
-      |> cast_assoc(:category)
-    end
-  end
-
-  defmodule TimestampedChild do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key {:id, :integer, autogenerate: false}
-    schema "timestamped_children" do
-      field :parent_id, :integer
-      field :value, :string
-      field :inserted_at, :utc_datetime_usec
-    end
-
-    def changeset(attrs), do: changeset(%__MODULE__{}, attrs)
-
-    def changeset(struct, attrs) do
-      struct
-      |> cast(attrs, [:id, :parent_id, :value])
-      |> validate_required([:id, :parent_id, :value])
-    end
-  end
-
-  defmodule ParentWithTimestamps do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key {:id, :integer, autogenerate: false}
-    schema "parents_with_timestamps" do
-      field :name, :string
-      field :inserted_at, :utc_datetime_usec
-      has_many :children, TimestampedChild
-    end
-
-    def changeset(attrs) do
-      %__MODULE__{}
-      |> cast(attrs, [:id, :name])
-      |> validate_required([:id, :name])
-      |> cast_assoc(:children)
-    end
-  end
-
-  defmodule ParentWithAltChangeset do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key {:id, :integer, autogenerate: false}
-    schema "parents_with_alt_changeset" do
-      field :name, :string
-    end
-
-    def changeset(attrs) do
-      %__MODULE__{}
-      |> cast(attrs, [:id, :name])
-      |> validate_required([:id, :name])
-    end
-
-    def upsert_changeset(attrs) do
-      %__MODULE__{}
-      |> cast(attrs, [:id])
-      |> validate_required([:id])
-    end
-  end
-
-  defmodule RecoverableParent do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key {:id, :integer, autogenerate: false}
-    schema "recoverable_parents" do
-      field :phone_number, :string
-    end
-
-    def changeset(attrs) do
-      %__MODULE__{}
-      |> cast(attrs, [:id, :phone_number])
-      |> validate_required([:id, :phone_number])
-      |> validate_format(:phone_number, ~r/^\d{3}-\d{4}$/)
-    end
-  end
-
-  setup do
-    start_supervised!({InsertAllSpy, []})
-    :ok
+    assert Repo.all(from a in Author, order_by: a.id, select: a.name) == ["Alicia", "Bobby"]
   end
 
   test "chunks parent upserts according to chunk_size" do
-    attrs_list =
-      Enum.map(1..5, fn id ->
-        %{id: id, name: "parent-#{id}"}
-      end)
+    attach_insert_counter("authors")
 
-    :ok =
-      BulkUpsert.bulk_upsert(RepoStub, Parent, attrs_list,
-        chunk_size: 2,
-        insert_all_function_module: InsertAllSpy
-      )
+    attrs_list = Enum.map(1..5, fn id -> %{id: id, name: "author-#{id}"} end)
 
-    parent_chunk_sizes =
-      InsertAllSpy.calls()
-      |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} -> schema_module == Parent end)
-      |> Enum.map(fn {_fun, _schema_module, attrs_list, _opts} -> length(attrs_list) end)
+    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list, chunk_size: 2)
 
-    assert parent_chunk_sizes == [2, 2, 1]
+    # 5 authors in chunks of 2 -> 3 INSERT queries
+    assert count_insert_queries("authors") == 3
+    assert Repo.aggregate(Author, :count) == 5
   end
 
   test "chunks has_many association upserts according to chunk_size" do
+    attach_insert_counter("posts")
+
     attrs_list = [
       %{
         id: 1,
-        name: "parent-1",
-        children: [
-          %{id: 101, parent_id: 1, value: "a"},
-          %{id: 102, parent_id: 1, value: "b"},
-          %{id: 103, parent_id: 1, value: "c"}
+        name: "Alice",
+        posts: [
+          %{id: 101, author_id: 1, title: "a"},
+          %{id: 102, author_id: 1, title: "b"},
+          %{id: 103, author_id: 1, title: "c"}
         ]
       },
       %{
         id: 2,
-        name: "parent-2",
-        children: [
-          %{id: 201, parent_id: 2, value: "d"},
-          %{id: 202, parent_id: 2, value: "e"},
-          %{id: 203, parent_id: 2, value: "f"}
+        name: "Bob",
+        posts: [
+          %{id: 201, author_id: 2, title: "d"},
+          %{id: 202, author_id: 2, title: "e"},
+          %{id: 203, author_id: 2, title: "f"}
         ]
       }
     ]
 
-    :ok =
-      BulkUpsert.bulk_upsert(RepoStub, Parent, attrs_list,
-        chunk_size: 2,
-        insert_all_function_module: InsertAllSpy
-      )
+    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list, chunk_size: 2)
 
-    child_chunk_sizes =
-      InsertAllSpy.calls()
-      |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} -> schema_module == Child end)
-      |> Enum.map(fn {_fun, _schema_module, attrs_list, _opts} -> length(attrs_list) end)
-
-    assert child_chunk_sizes == [2, 2, 2]
+    # 6 posts in chunks of 2 -> 3 INSERT queries
+    assert count_insert_queries("posts") == 3
+    assert Repo.aggregate(Post, :count) == 6
   end
 
   test "upserts has_one associations into their own table" do
     attrs_list = [
-      %{id: 1, name: "parent-1", profile: %{id: 101, parent_id: 1, bio: "a"}},
-      %{id: 2, name: "parent-2", profile: %{id: 102, parent_id: 2, bio: "b"}}
+      %{id: 1, name: "Alice", profile: %{id: 101, author_id: 1, bio: "a"}},
+      %{id: 2, name: "Bob", profile: %{id: 102, author_id: 2, bio: "b"}}
     ]
 
-    :ok =
-      BulkUpsert.bulk_upsert(RepoStub, ParentWithProfile, attrs_list,
-        insert_all_function_module: InsertAllSpy
-      )
+    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
 
-    profile_attrs =
-      InsertAllSpy.calls()
-      |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} -> schema_module == Profile end)
-      |> Enum.flat_map(fn {_fun, _schema_module, attrs_list, _opts} -> attrs_list end)
-
-    # Each parent contributes its single profile to the profiles upsert
-    assert length(profile_attrs) == length(attrs_list)
-    assert %{id: 101, parent_id: 1, bio: "a"} in profile_attrs
-    assert %{id: 102, parent_id: 2, bio: "b"} in profile_attrs
+    assert Repo.all(from p in Profile, order_by: p.id, select: {p.author_id, p.bio}) ==
+             [{1, "a"}, {2, "b"}]
   end
 
   test "skips parents whose has_one association is absent" do
     attrs_list = [
-      %{id: 1, name: "parent-1", profile: %{id: 101, parent_id: 1, bio: "a"}},
-      %{id: 2, name: "parent-2"}
+      %{id: 1, name: "Alice", profile: %{id: 101, author_id: 1, bio: "a"}},
+      %{id: 2, name: "Bob"}
     ]
 
-    :ok =
-      BulkUpsert.bulk_upsert(RepoStub, ParentWithProfile, attrs_list,
-        insert_all_function_module: InsertAllSpy
-      )
+    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
 
-    profile_attrs =
-      InsertAllSpy.calls()
-      |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} -> schema_module == Profile end)
-      |> Enum.flat_map(fn {_fun, _schema_module, attrs_list, _opts} -> attrs_list end)
-
-    # Only the parent that supplied a profile results in a profile upsert
-    assert profile_attrs == [%{id: 101, parent_id: 1, bio: "a"}]
+    # Only the author that supplied a profile results in a profile row
+    assert Repo.all(from p in Profile, select: p.id) == [101]
+    assert Repo.aggregate(Author, :count) == 2
   end
 
-  test "carries embeds along in the parent upsert instead of a separate table" do
+  test "stores embedded data inline on the parent row instead of a separate table" do
     attrs_list = [
       %{
         id: 1,
-        name: "parent-1",
+        name: "Alice",
         address: %{street: "1 Main St", city: "Springfield"},
-        tags: [%{label: "a"}, %{label: "b"}]
+        social_links: [
+          %{label: "website", url: "https://example.com"},
+          %{label: "mastodon", url: "https://social.example.com/@alice"}
+        ]
       }
     ]
 
-    :ok =
-      BulkUpsert.bulk_upsert(RepoStub, ParentWithEmbeds, attrs_list,
-        insert_all_function_module: InsertAllSpy
-      )
+    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
 
-    calls = InsertAllSpy.calls()
+    author = Repo.get!(Author, 1)
+    assert author.address == %Address{street: "1 Main St", city: "Springfield"}
 
-    # Embeds have no table of their own, so every upsert targets the parent schema
-    assert Enum.all?(calls, fn {_fun, schema_module, _attrs, _opts} ->
-             schema_module == ParentWithEmbeds
-           end)
-
-    # The embedded data rides along inside the parent attrs as applied structs
-    [{:insert_all, ParentWithEmbeds, [parent_attrs], _opts}] = calls
-    assert parent_attrs.address == %Address{street: "1 Main St", city: "Springfield"}
-    assert parent_attrs.tags == [%Tag{label: "a"}, %Tag{label: "b"}]
+    assert author.social_links == [
+             %SocialLink{label: "website", url: "https://example.com"},
+             %SocialLink{label: "mastodon", url: "https://social.example.com/@alice"}
+           ]
   end
 
   test "upserts many_to_many related records and join rows, deduplicated" do
-    # The two parents share topic 10, which must be upserted (and linked) without duplication
+    Repo.insert!(%Author{id: 1, name: "Alice"})
+
+    # Both posts share tag 10, which must be upserted (and linked) without duplication
     attrs_list = [
-      %{id: 1, name: "parent-1", topics: [%{id: 10, name: "elixir"}, %{id: 11, name: "ecto"}]},
-      %{id: 2, name: "parent-2", topics: [%{id: 10, name: "elixir"}]}
+      %{
+        id: 1,
+        author_id: 1,
+        title: "P1",
+        tags: [%{id: 10, name: "elixir"}, %{id: 11, name: "ecto"}]
+      },
+      %{id: 2, author_id: 1, title: "P2", tags: [%{id: 10, name: "elixir"}]}
     ]
 
-    :ok =
-      BulkUpsert.bulk_upsert(RepoStub, ParentWithTopics, attrs_list,
-        insert_all_function_module: InsertAllSpy
+    :ok = BulkUpsert.bulk_upsert(Repo, Post, attrs_list)
+
+    assert Repo.all(from t in Tag, order_by: t.id, select: {t.id, t.name}) ==
+             [{10, "elixir"}, {11, "ecto"}]
+
+    join_rows =
+      Repo.all(
+        from j in "posts_tags", order_by: [j.post_id, j.tag_id], select: {j.post_id, j.tag_id}
       )
 
-    calls = InsertAllSpy.calls()
+    assert join_rows == [{1, 10}, {1, 11}, {2, 10}]
 
-    # The related records are upserted into their own table, deduplicated by primary key
-    topic_attrs =
-      calls
-      |> Enum.filter(fn {_fun, schema_module, _attrs, _opts} -> schema_module == Topic end)
-      |> Enum.flat_map(fn {_fun, _schema_module, attrs_list, _opts} -> attrs_list end)
-
-    assert Enum.sort_by(topic_attrs, & &1.id) == [
-             %{id: 10, name: "elixir"},
-             %{id: 11, name: "ecto"}
-           ]
-
-    # The join table rows link each parent to each of its related records
-    join_attrs =
-      calls
-      |> Enum.filter(fn {_fun, source, _attrs, _opts} -> source == "parents_topics" end)
-      |> Enum.flat_map(fn {_fun, _source, attrs_list, _opts} -> attrs_list end)
-
-    assert Enum.sort_by(join_attrs, &{&1.parent_id, &1.topic_id}) == [
-             %{parent_id: 1, topic_id: 10},
-             %{parent_id: 1, topic_id: 11},
-             %{parent_id: 2, topic_id: 10}
-           ]
+    # Upserting the same attrs again is idempotent (relies on the join table's unique index)
+    :ok = BulkUpsert.bulk_upsert(Repo, Post, attrs_list)
+    assert Repo.aggregate("posts_tags", :count) == 3
   end
 
-  test "does not upsert nested belongs_to associations; foreign key rides along on the parent" do
-    # The parent supplies both a category_id field and a nested category association
+  test "does not upsert nested belongs_to associations; the foreign key rides along on the parent" do
+    Repo.insert!(%Author{id: 1, name: "Alice"})
+    Repo.insert!(%Category{id: 5, name: "books"})
+
+    # The post supplies both a category_id field and a nested category association
     attrs_list = [
-      %{id: 1, name: "parent-1", category_id: 5, category: %{id: 5, name: "books"}}
+      %{
+        id: 1,
+        author_id: 1,
+        title: "P1",
+        category_id: 5,
+        category: %{id: 5, name: "updated books"}
+      }
     ]
 
-    :ok =
-      BulkUpsert.bulk_upsert(RepoStub, ParentWithCategory, attrs_list,
-        insert_all_function_module: InsertAllSpy
-      )
+    :ok = BulkUpsert.bulk_upsert(Repo, Post, attrs_list)
 
-    calls = InsertAllSpy.calls()
-
-    # The belongs_to related record is never upserted into its own table
-    refute Enum.any?(calls, fn {_fun, schema_module, _attrs, _opts} ->
-             schema_module == Category
-           end)
-
-    # The foreign key rides along as a plain field on the parent row, while the nested
-    # association changeset is dropped
-    [{:insert_all, ParentWithCategory, [parent_attrs], _opts}] = calls
-    assert parent_attrs.category_id == 5
-    refute Map.has_key?(parent_attrs, :category)
+    # The foreign key is set on the post, but the nested category data is never upserted
+    assert Repo.get!(Post, 1).category_id == 5
+    assert Repo.all(from c in Category, select: {c.id, c.name}) == [{5, "books"}]
   end
 
-  test "applies placeholders to parent and association entries and insert_all opts" do
+  test "sets placeholder fields on parent and association rows" do
     timestamp = ~U[2026-01-01 00:00:00.000000Z]
 
     attrs_list = [
-      %{id: 1, name: "parent-1", children: [%{id: 101, parent_id: 1, value: "a"}]}
+      %{id: 1, name: "Alice", posts: [%{id: 101, author_id: 1, title: "a"}]}
     ]
 
     :ok =
-      BulkUpsert.bulk_upsert(RepoStub, ParentWithTimestamps, attrs_list,
-        insert_all_function_module: InsertAllSpy,
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
         placeholders: %{
-          ParentWithTimestamps => %{inserted_at: timestamp},
-          TimestampedChild => %{inserted_at: timestamp}
+          Author => %{inserted_at: timestamp},
+          Post => %{inserted_at: timestamp}
         }
       )
 
-    calls = InsertAllSpy.calls()
-
-    [{:insert_all, ParentWithTimestamps, parent_entries, parent_opts}] =
-      Enum.filter(calls, fn {_fun, schema_module, _attrs, _opts} ->
-        schema_module == ParentWithTimestamps
-      end)
-
-    [{:insert_all, TimestampedChild, child_entries, child_opts}] =
-      Enum.filter(calls, fn {_fun, schema_module, _attrs, _opts} ->
-        schema_module == TimestampedChild
-      end)
-
-    # The placeholder field references the placeholder instead of carrying the value inline, while
-    # the other fields survive untouched
-    assert Enum.all?(parent_entries, &(&1.inserted_at == {:placeholder, :inserted_at}))
-    assert Enum.all?(child_entries, &(&1.inserted_at == {:placeholder, :inserted_at}))
-    assert hd(parent_entries).name == "parent-1"
-    assert hd(child_entries).value == "a"
-
-    # The placeholder value is sent once per schema via insert_all's `:placeholders` option
-    assert parent_opts[:placeholders] == %{inserted_at: timestamp}
-    assert child_opts[:placeholders] == %{inserted_at: timestamp}
+    assert Repo.get!(Author, 1).inserted_at == timestamp
+    assert Repo.get!(Post, 101).inserted_at == timestamp
   end
 
   test "uses changeset_function_atom when provided" do
-    attrs_list = [%{id: 10}]
-
     :ok =
-      BulkUpsert.bulk_upsert(RepoStub, ParentWithAltChangeset, attrs_list,
-        changeset_function_atom: :upsert_changeset,
-        insert_all_function_module: InsertAllSpy
+      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 10, name: "ignored"}],
+        changeset_function_atom: :upsert_changeset
       )
 
-    parent_calls =
-      InsertAllSpy.calls()
-      |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} ->
-        schema_module == ParentWithAltChangeset
-      end)
-
-    assert length(parent_calls) == 1
-    assert [{:insert_all, ParentWithAltChangeset, [%{id: 10}], _opts}] = parent_calls
+    # The alternative changeset only casts :id, so the name never reaches the database
+    assert Repo.get!(Author, 10).name == nil
   end
 
   @tag :capture_log
@@ -565,85 +201,102 @@ defmodule BulkUpsertTest do
       %{id: 2}
     ]
 
-    :ok =
-      BulkUpsert.bulk_upsert(RepoStub, Parent, attrs_list,
-        insert_all_function_module: InsertAllSpy
-      )
+    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
 
-    assert [{:insert_all, Parent, [%{id: 1, name: "valid"}], _opts}] =
-             InsertAllSpy.calls()
-             |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} ->
-               schema_module == Parent
-             end)
+    assert Repo.all(from a in Author, select: {a.id, a.name}) == [{1, "valid"}]
   end
 
   @tag :capture_log
   test "recovers configured changeset errors before upsert" do
-    attrs_list = [%{id: 1, phone_number: "INVALID"}]
+    attrs_list = [%{id: 1, name: "Alice", phone_number: "INVALID"}]
 
     :ok =
-      BulkUpsert.bulk_upsert(RepoStub, RecoverableParent, attrs_list,
-        insert_all_function_module: InsertAllSpy,
-        recover_changeset_errors: %{RecoverableParent => %{phone_number: "555-1234"}}
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        recover_changeset_errors: %{Author => %{phone_number: "555-1234"}}
       )
 
-    assert [{:insert_all, RecoverableParent, [%{id: 1, phone_number: "555-1234"}], _opts}] =
-             InsertAllSpy.calls()
-             |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} ->
-               schema_module == RecoverableParent
-             end)
+    assert Repo.get!(Author, 1).phone_number == "555-1234"
   end
 
-  test "applies insert_all_opts and timeout for parent and child upserts" do
+  test "applies custom insert_all_opts per schema" do
+    insert_all_opts = %{
+      Author => [on_conflict: :nothing],
+      Post => [on_conflict: {:replace, [:title]}]
+    }
+
     attrs_list = [
-      %{
-        id: 1,
-        name: "parent-1",
-        children: [%{id: 101, parent_id: 1, value: "x"}]
-      }
+      %{id: 1, name: "Alice", posts: [%{id: 101, author_id: 1, title: "a"}]}
+    ]
+
+    :ok = BulkUpsert.bulk_upsert(Repo, Author, attrs_list, insert_all_opts: insert_all_opts)
+
+    updated_attrs_list = [
+      %{id: 1, name: "Alicia", posts: [%{id: 101, author_id: 1, title: "b"}]}
     ]
 
     :ok =
-      BulkUpsert.bulk_upsert(RepoStub, Parent, attrs_list,
-        timeout: 45_000,
-        replace_all_except: [:name],
-        insert_all_function_module: InsertAllSpy,
-        insert_all_opts: %{
-          Parent => [on_conflict: {:nothing}],
-          Child => [on_conflict: {:replace, [:value]}]
-        }
+      BulkUpsert.bulk_upsert(Repo, Author, updated_attrs_list, insert_all_opts: insert_all_opts)
+
+    # The author conflict did nothing, while the post conflict replaced the title
+    assert Repo.get!(Author, 1).name == "Alice"
+    assert Repo.get!(Post, 101).title == "b"
+  end
+
+  test "replace_all_except preserves the given fields on conflict" do
+    :ok =
+      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice", phone_number: "555-1234"}])
+
+    :ok =
+      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alicia", phone_number: "555-9999"}],
+        replace_all_except: [:name]
       )
 
-    [{:insert_all, Parent, _parent_attrs, parent_opts}] =
-      InsertAllSpy.calls()
-      |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} -> schema_module == Parent end)
-
-    [{:insert_all, Child, _child_attrs, child_opts}] =
-      InsertAllSpy.calls()
-      |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} -> schema_module == Child end)
-
-    assert parent_opts[:conflict_target] == [:id]
-    assert parent_opts[:on_conflict] == {:nothing}
-    assert parent_opts[:timeout] == 45_000
-
-    assert child_opts[:conflict_target] == [:id]
-    assert child_opts[:on_conflict] == {:replace, [:value]}
-    assert child_opts[:timeout] == 45_000
+    author = Repo.get!(Author, 1)
+    assert author.name == "Alice"
+    assert author.phone_number == "555-9999"
   end
 
   test "uses insert_all_function_atom when provided" do
-    attrs_list = [%{id: 1, name: "parent-1"}]
+    attrs_list = [
+      %{id: 1, name: "Alice", posts: [%{id: 101, author_id: 1, title: "a"}]}
+    ]
 
     :ok =
-      BulkUpsert.bulk_upsert(RepoStub, Parent, attrs_list,
-        insert_all_function_module: InsertAllSpy,
-        insert_all_function_atom: :custom_insert_all
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+        insert_all_function_atom: :insert_all_with_autogenerated_timestamps
       )
 
-    assert [{:custom_insert_all, Parent, [%{id: 1, name: "parent-1"}], _opts}] =
-             InsertAllSpy.calls()
-             |> Enum.filter(fn {_fun, schema_module, _attrs_list, _opts} ->
-               schema_module == Parent
-             end)
+    # The custom function (the README recipe) autogenerates the insert timestamps
+    assert %DateTime{} = Repo.get!(Author, 1).inserted_at
+    assert %DateTime{} = Repo.get!(Post, 101).inserted_at
+  end
+
+  test "uses insert_all_function_module when provided, passing conflict opts and timeout" do
+    :ok =
+      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}],
+        insert_all_function_module: ProxyRepo,
+        timeout: 45_000
+      )
+
+    assert Repo.get!(Author, 1).name == "Alice"
+
+    assert_received {:proxy_insert_all, Author, [%{id: 1, name: "Alice"}], opts}
+    assert opts[:conflict_target] == [:id]
+    assert opts[:on_conflict] == {:replace_all_except, [:id]}
+    assert opts[:timeout] == 45_000
+  end
+
+  test "rolls back the whole transaction when an association upsert fails" do
+    # The post references a nonexistent author, so its foreign key constraint fails
+    attrs_list = [
+      %{id: 1, name: "Alice", posts: [%{id: 101, author_id: 999, title: "a"}]}
+    ]
+
+    assert_raise Postgrex.Error, ~r/foreign_key/, fn ->
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+    end
+
+    # The author was upserted before the post failed, but the transaction rolled it back
+    assert Repo.aggregate(Author, :count) == 0
   end
 end

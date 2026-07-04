@@ -10,7 +10,9 @@ defmodule BulkUpsert.MixProject do
       app: :bulk_upsert,
       version: @version,
       elixir: "~> 1.15",
+      elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
+      aliases: aliases(),
       deps: deps(),
 
       # Hex
@@ -34,9 +36,26 @@ defmodule BulkUpsert.MixProject do
   defp deps do
     [
       {:ecto, "~> 3.0"},
-      {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
+      {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
+
+      # Used only by the demo app that backs the test suite
+      {:ecto_sql, "~> 3.0", only: :test},
+      {:jason, "~> 1.0", only: :test},
+      {:postgrex, ">= 0.0.0", only: :test}
     ]
   end
+
+  defp aliases do
+    [
+      "ecto.setup": ["ecto.create", "ecto.migrate"],
+      "ecto.reset": ["ecto.drop", "ecto.setup"],
+      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"]
+    ]
+  end
+
+  # The demo app used by the test suite lives in `test/support/`
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   defp docs do
     [
