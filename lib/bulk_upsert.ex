@@ -38,7 +38,7 @@ defmodule BulkUpsert do
   `schema_module`. The changeset function is called with a single argument (the attrs map), so
   the schema module must expose a 1-arity changeset function — e.g. a `changeset/2` whose first
   argument defaults to an empty struct. By default, this function is called `:changeset`. (See
-  the `#options` section for more info.)
+  the Options section below for more info.)
 
   ## Basic example
 
@@ -71,8 +71,8 @@ defmodule BulkUpsert do
   `schema_module`. It is called with one argument: the attrs map. (Default: `:changeset`)
 
   - `:chunk_size` - The number of parent attrs items to insert into the database in a single
-  query. Can be increased or decreased as needed to avoid hitting Postgres max item limit for a
-  single query. (Default: `1000`)
+  query. Can be increased or decreased as needed to avoid exceeding the Postgres parameter limit
+  for a single query. (Default: `1000`)
 
   - `:insert_all_function_module` - Instead of using the `:insert_all` function in the given
   `repo_module`, you may specify the name of a custom module to use instead. (Default:
@@ -88,8 +88,8 @@ defmodule BulkUpsert do
   - `:insert_all_opts` - Pass custom `opts` to the `insert_all/3` function. This option consists
   of a map whose key is the schema or source that may have items being upserted, and the value is
   the `YourProject.Repo.insert_all/3` opts that will be applied when items for that schema are
-  being upserted. By default, this function is configured to replace all values in a given struct,
-  except for the primary key(s) and the insert timestamp. (Default: `%{}`)
+  being upserted. By default, a conflicting row has all of its values replaced except the primary
+  key(s) (see the `:replace_all_except` option). (Default: `%{}`)
     - Example: `%{YourProject.Persons.Person => [on_conflict: {:nothing}]}`
     - A `many_to_many` join table is keyed by its source, e.g. `%{"persons_topics" => [...]}`.
     - `:conflict_target` defaults to the schema's primary key, so a schema without a primary key
@@ -144,11 +144,9 @@ defmodule BulkUpsert do
       ...> )
       {:ok, %{upserted: 1, skipped: 0}}
 
-  Upsert a list of attrs, but overwrite the `:name` field if there is a conflict.
-
-  If using this option, you must declare each schema that will get a customized `:insert_all_opts`
-  keyword list. Any schemas that are not given custom `:insert_all_opts` will overwrite all fields
-  except the primary key:
+  Upsert a list of attrs, overwriting only the `:name` field if there is a conflict. Schemas that
+  are not given custom `:insert_all_opts` keep the default conflict behavior (replace all fields
+  except the primary key):
 
       iex> insert_all_opts = %{
       ...>   YourProject.Persons.Person => [on_conflict: {:replace, [:name]}]
