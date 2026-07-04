@@ -146,19 +146,26 @@ defmodule BulkUpsert do
   rather than upserted (embedded data on a child is still stored inline on the child's row).
   """
   def bulk_upsert(repo_module, schema_module, attrs_list, opts \\ []) do
-    changeset_function_atom = Keyword.get(opts, :changeset_function_atom, :changeset)
-    chunk_size = Keyword.get(opts, :chunk_size, 1000)
-    recover_changeset_errors = Keyword.get(opts, :recover_changeset_errors, %{})
+    # Parse all options once; `config` is threaded through every helper below
+    config = %{
+      changeset_function_atom: Keyword.get(opts, :changeset_function_atom, :changeset),
+      chunk_size: Keyword.get(opts, :chunk_size, 1000),
+      recover_changeset_errors: Keyword.get(opts, :recover_changeset_errors, %{}),
+      insert_all_function_module: Keyword.get(opts, :insert_all_function_module, repo_module),
+      insert_all_function_atom: Keyword.get(opts, :insert_all_function_atom, :insert_all),
+      insert_all_opts: Keyword.get(opts, :insert_all_opts, %{}),
+      replace_all_except: Keyword.get(opts, :replace_all_except, []),
+      placeholders: Keyword.get(opts, :placeholders, %{}),
+      timeout: Keyword.get(opts, :timeout, @default_timeout)
+    }
 
     changeset_chunks =
       attrs_list
       # Convert to changesets so the data can be validated before upsertion
-      |> Enum.map(fn attrs -> apply(schema_module, changeset_function_atom, [attrs]) end)
-      |> then(&handle_invalid_changesets(schema_module, &1, recover_changeset_errors))
+      |> Enum.map(fn attrs -> apply(schema_module, config.changeset_function_atom, [attrs]) end)
+      |> then(&handle_invalid_changesets(schema_module, &1, config.recover_changeset_errors))
       # Work around Postgres bulk limits by chunking large payloads
-      |> Enum.chunk_every(chunk_size)
-
-    timeout = Keyword.get(opts, :timeout, @default_timeout)
+      |> Enum.chunk_every(config.chunk_size)
 
     # Wrap all bulk upserts in a single transaction so that any failure rolls back all changes
     # made to every chunk of parents and all of their associations
@@ -171,9 +178,9 @@ defmodule BulkUpsert do
         # If the additional performance is required, the caller may be able to pass in its PID to
         # the `Repo.insert_all/3` opts to work around this issue, at the cost of additional
         # complexity in the codebase)
-        Enum.each(changeset_chunks, &do_bulk_upsert(repo_module, schema_module, &1, opts))
+        Enum.each(changeset_chunks, &do_bulk_upsert(schema_module, &1, config))
       end,
-      timeout: timeout
+      timeout: config.timeout
     )
 
     :ok
@@ -218,22 +225,9 @@ defmodule BulkUpsert do
     end)
   end
 
-  defp do_bulk_upsert(repo_module, schema_module, changesets, opts) do
-    insert_all_function_module = Keyword.get(opts, :insert_all_function_module, repo_module)
-    insert_all_function_atom = Keyword.get(opts, :insert_all_function_atom, :insert_all)
-    insert_all_opts = Keyword.get(opts, :insert_all_opts, %{})
-    replace_all_except = Keyword.get(opts, :replace_all_except, [])
-    chunk_size = Keyword.get(opts, :chunk_size, 1000)
-    timeout = Keyword.get(opts, :timeout, @default_timeout)
-    placeholders = Keyword.get(opts, :placeholders, %{})
-
-    # Bundle the values that every `insert_all` call site shares
-    insert_all_context = %{
-      insert_all_function_module: insert_all_function_module,
-      insert_all_function_atom: insert_all_function_atom,
-      chunk_size: chunk_size,
-      placeholders: placeholders
-    }
+  defp do_bulk_upsert(schema_module, changesets, config) do
+    %{insert_all_opts: insert_all_opts, replace_all_except: replace_all_except, timeout: timeout} =
+      config
 
     # Perform bulk upsert for all parent attrs
     attrs_list =
@@ -254,7 +248,7 @@ defmodule BulkUpsert do
         insert_all_opts[schema_module] || []
       )
 
-    insert_all_entries(attrs_list, schema_module, parent_insert_all_opts, insert_all_context)
+    insert_all_entries(attrs_list, schema_module, parent_insert_all_opts, config)
 
     # Perform bulk upsert for all `has_many` and `has_one` associations
     for association <- get_schema_associations(schema_module, :has) do
@@ -289,7 +283,7 @@ defmodule BulkUpsert do
         association_attrs_list,
         association_schema_module,
         association_insert_all_opts,
-        insert_all_context
+        config
       )
     end
 
@@ -338,7 +332,7 @@ defmodule BulkUpsert do
         related_attrs_list,
         related_schema_module,
         related_insert_all_opts,
-        insert_all_context
+        config
       )
 
       # Upsert the join table rows that link each parent to its related records. The same link
@@ -367,7 +361,7 @@ defmodule BulkUpsert do
         join_attrs_list,
         join_through,
         join_insert_all_opts,
-        insert_all_context
+        config
       )
     end
   end
