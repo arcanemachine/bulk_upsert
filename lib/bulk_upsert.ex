@@ -15,8 +15,10 @@ defmodule BulkUpsert do
     2. Using a changeset allows this function to perform bulk upserts with nested associations.
 
   For validation, each list item in the `attrs_list` is converted to a changeset for a given
-  `schema_module`. By default, this function expects the schema module to contain a 2-arity
-  function called `:changeset`. (See the `#options` section for more info.)
+  `schema_module`. The changeset function is called with a single argument (the attrs map), so
+  the schema module must expose a 1-arity changeset function — e.g. a `changeset/2` whose first
+  argument defaults to an empty struct. By default, this function is called `:changeset`. (See
+  the `#options` section for more info.)
 
   ## Basic example
 
@@ -32,8 +34,8 @@ defmodule BulkUpsert do
 
   ## Options
 
-  - `:changeset_function_atom` - The name of the 2-arity changeset function to apply for the given
-  `schema_module` (Default: `:changeset`)
+  - `:changeset_function_atom` - The name of the changeset function to apply for the given
+  `schema_module`. It is called with one argument: the attrs map. (Default: `:changeset`)
 
   - `:chunk_size` - The number of parent attrs items to insert into the database in a single
   query. Can be increased or decreased as needed to avoid hitting Postgres max item limit for a
@@ -42,7 +44,7 @@ defmodule BulkUpsert do
   - `:insert_all_function_module` - Instead of using the `:insert_all` function in the given
   `repo_module`, you may specify the name of a custom module to use instead. (Default:
   Inherited from the value specified in the `repo_module` function argument, e.g.
-  `YourProject.Repo`))
+  `YourProject.Repo`)
     - Example: `YourProject.OtherRepo`
 
   - `:insert_all_function_atom` - Instead of using your repo module's `:insert_all`

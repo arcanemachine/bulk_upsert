@@ -40,7 +40,6 @@ defmodule BulkUpsert.MixProject do
 
   defp docs do
     [
-      main: @project_name,
       extras: [
         "README.md": [title: "Readme"],
         "CHANGELOG.md": [title: "Changelog"]
