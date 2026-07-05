@@ -1,5 +1,14 @@
 defmodule BulkUpsert do
-  @moduledoc "Bulk upsert Ecto structs and their nested associations in one call."
+  @moduledoc """
+  Bulk upsert Ecto structs and their nested associations in one call.
+
+  > #### This package has been renamed to `bulkinup` {: .warning}
+  >
+  > `bulk_upsert` continues as [`bulkinup`](https://hex.pm/packages/bulkinup), and this
+  > package will receive no further updates. Migrating is a rename: `BulkUpsert.bulk_upsert/4`
+  > is now `Bulkinup.upsert/4` — same arguments, same options, same return shape. See the
+  > [migration guide](https://hexdocs.pm/bulkinup/migrating_from_bulk_upsert.html).
+  """
 
   require Logger
 
