@@ -5,6 +5,9 @@ defmodule BulkUpsert do
 
   @default_timeout 15_000
 
+  # Cap the number of skipped-item IDs included in the summary warning's metadata
+  @skipped_item_ids_log_limit 50
+
   @typedoc """
   Options accepted by `bulk_upsert/4`. See that function's documentation for details.
 
@@ -56,8 +59,9 @@ defmodule BulkUpsert do
 
   Returns `{:ok, %{upserted: upserted_count, skipped: skipped_count}}`, where the counts refer to
   the top-level attrs: `:upserted` is the number of items sent to the database, and `:skipped` is
-  the number of items dropped because their changesets were invalid. (Each skipped item is also
-  logged at the `:warning` level.) A database error rolls back the entire upsert and raises.
+  the number of items dropped because their changesets were invalid. (Skipped items are
+  summarized in one `:warning` log per call, with per-item detail at the `:debug` level.) A
+  database error rolls back the entire upsert and raises.
 
   ## Options
 
@@ -525,7 +529,7 @@ defmodule BulkUpsert do
 
     invalid_attrs = Map.merge(invalid_parent_attrs, invalid_association_attrs)
 
-    Logger.warning(
+    Logger.debug(
       """
       This changeset has one or more unrecoverable errors. The item associated with this \
       changeset will not be upserted.\
@@ -662,14 +666,46 @@ defmodule BulkUpsert do
   end
 
   defp reject_invalid_changesets(schema_module, changesets) do
-    changesets
-    |> Enum.reject(fn changeset ->
-      if changeset.valid? do
-        _reject_changeset? = false
-      else
-        log_on_bulk_upsert_changeset_error(schema_module, changeset)
-        _reject_changeset? = true
-      end
-    end)
+    {valid_changesets, invalid_changesets} = Enum.split_with(changesets, & &1.valid?)
+
+    if invalid_changesets != [] do
+      log_skipped_changesets_summary(schema_module, changesets, invalid_changesets)
+      Enum.each(invalid_changesets, &log_on_bulk_upsert_changeset_error(schema_module, &1))
+    end
+
+    valid_changesets
+  end
+
+  # One `:warning` per bulk upsert call summarizes every skipped item. The per-item details are
+  # logged at the `:debug` level, so a large batch of invalid rows cannot flood the log.
+  defp log_skipped_changesets_summary(schema_module, changesets, invalid_changesets) do
+    skipped_count = length(invalid_changesets)
+
+    item_ids =
+      invalid_changesets
+      |> Enum.take(@skipped_item_ids_log_limit)
+      |> Enum.map(fn changeset ->
+        schema_module.__schema__(:primary_key)
+        |> Map.new(fn primary_key_field ->
+          {primary_key_field, changeset.changes[primary_key_field]}
+        end)
+      end)
+
+    truncation_note =
+      if skipped_count > @skipped_item_ids_log_limit,
+        do: " The first #{@skipped_item_ids_log_limit} skipped item IDs are listed.",
+        else: ""
+
+    Logger.warning(
+      """
+      Skipped #{skipped_count} of #{length(changesets)} items because their changesets had \
+      unrecoverable errors. The skipped items were not upserted. Details for each skipped item \
+      are logged at the `:debug` level.#{truncation_note}\
+      """,
+      reason: :bulk_upsert_items_skipped,
+      schema_module: inspect(schema_module),
+      skipped_count: skipped_count,
+      item_ids: item_ids
+    )
   end
 end

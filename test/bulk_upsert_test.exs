@@ -335,6 +335,22 @@ defmodule BulkUpsertTest do
     assert Repo.all(from a in Author, select: {a.id, a.name}) == [{1, "valid"}]
   end
 
+  test "logs one warning summarizing all skipped rows" do
+    attrs_list = [%{id: 1}, %{id: 2}, %{id: 3, name: "valid"}]
+
+    {result, log} =
+      ExUnit.CaptureLog.with_log([level: :warning], fn ->
+        BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+      end)
+
+    assert {:ok, %{upserted: 1, skipped: 2}} = result
+
+    # One summary warning covers both skipped rows; the per-row details are logged at `:debug`
+    # and do not appear at the `:warning` level
+    assert log =~ "Skipped 2 of 3 items"
+    refute log =~ "This changeset has one or more unrecoverable errors"
+  end
+
   @tag :capture_log
   test "recovers configured changeset errors before upsert" do
     attrs_list = [%{id: 1, name: "Alice", phone_number: "INVALID"}]

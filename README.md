@@ -133,7 +133,7 @@ iex> YourProject.Repo.all(YourProject.Persons.Person)
 ]
 ```
 
-Rows whose changesets are invalid are skipped rather than upserted. The counts in the return value make this visible, and each skipped row is logged at the `:warning` level.
+Rows whose changesets are invalid are skipped rather than upserted. The counts in the return value make this visible, and each call that skips rows emits one `:warning` log summarizing them (with per-row detail at the `:debug` level).
 
 #### Working with nested associations
 
