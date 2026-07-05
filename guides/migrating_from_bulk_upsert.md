@@ -59,6 +59,14 @@ end
 > fails to compile. Delete the old wrapper function, then add `use Bulkinup`. Move any
 > defaults the wrapper hard-coded into the `use` options (see `Bulkinup.__using__/1`).
 
+Two small things to watch while moving the wrapper's defaults:
+
+- `use Bulkinup` conventionally sits with the other `use` lines, above the module's `alias`
+  lines — so fully qualify any module reference inside the `use` options (an alias defined
+  further down is not in effect there).
+- If the wrapper was the last user of an alias (or import), remove it too, or
+  `mix compile --warnings-as-errors` will fail on the unused alias.
+
 ## Log metadata
 
 If you filter logs on the library's `:reason` metadata, two atoms were renamed with the
