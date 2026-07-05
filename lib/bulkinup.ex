@@ -241,10 +241,17 @@ defmodule Bulkinup do
   @spec upsert(module(), module(), Enumerable.t(map()), options()) ::
           {:ok, %{upserted: non_neg_integer(), skipped: non_neg_integer()}}
   def upsert(repo_module, schema_module, attrs_list, opts \\ []) do
+    bulk_write(:upsert, repo_module, schema_module, attrs_list, opts)
+  end
+
+  # The shared write engine: validate, chunk, write, and summarize. Verb-specific behavior
+  # (conflict defaults and the verb's count key) dispatches on `config.verb`.
+  defp bulk_write(verb, repo_module, schema_module, attrs_list, opts) do
     validate_opts!(opts)
 
     # Parse all options once; `config` is threaded through every helper below
     config = %{
+      verb: verb,
       changeset_function_atom: Keyword.get(opts, :changeset_function_atom, :changeset),
       chunk_size: Keyword.get(opts, :chunk_size, 1000),
       max_concurrency: Keyword.get(opts, :max_concurrency),
@@ -269,27 +276,30 @@ defmodule Bulkinup do
       end
 
     # Build changesets lazily and chunk large payloads to stay within Postgres bulk limits.
-    # Laziness lets any `Enumerable` (including a `Stream`) be validated and upserted
+    # Laziness lets any `Enumerable` (including a `Stream`) be validated and written
     # chunk-by-chunk without materializing the whole input
     changeset_chunks =
       attrs_list
-      # Convert to changesets so the data can be validated before upsertion
+      # Convert to changesets so the data can be validated before writing
       |> Stream.map(fn attrs -> apply(schema_module, config.changeset_function_atom, [attrs]) end)
       |> Stream.chunk_every(config.chunk_size)
 
     totals =
       changeset_chunks
-      |> upsert_chunks(repo_module, schema_module, config)
+      |> write_chunks(repo_module, schema_module, config)
       |> aggregate_chunk_results()
 
     if totals.skipped > 0, do: log_skipped_changesets_summary(schema_module, totals)
 
-    {:ok, %{upserted: totals.upserted, skipped: totals.skipped}}
+    {:ok, %{count_key(verb) => totals.written, skipped: totals.skipped}}
   end
 
-  # Upsert every chunk sequentially, wrapped in a single transaction so that any failure rolls
+  # The key the verb's written count is returned under
+  defp count_key(:upsert), do: :upserted
+
+  # Write every chunk sequentially, wrapped in a single transaction so that any failure rolls
   # back all changes made to every chunk of parents and all of their associations
-  defp upsert_chunks(
+  defp write_chunks(
          changeset_chunks,
          repo_module,
          schema_module,
@@ -297,16 +307,16 @@ defmodule Bulkinup do
        ) do
     {:ok, chunk_results} =
       repo_module.transaction(
-        fn -> Enum.map(changeset_chunks, &upsert_chunk(schema_module, &1, config)) end,
+        fn -> Enum.map(changeset_chunks, &write_chunk(schema_module, &1, config)) end,
         timeout: config.timeout
       )
 
     chunk_results
   end
 
-  # Upsert chunks concurrently, each in its own transaction. A failing chunk raises in the
+  # Write chunks concurrently, each in its own transaction. A failing chunk raises in the
   # caller, but chunks that already committed stay committed (see the `:max_concurrency` docs)
-  defp upsert_chunks(changeset_chunks, repo_module, schema_module, config) do
+  defp write_chunks(changeset_chunks, repo_module, schema_module, config) do
     changeset_chunks
     |> Task.async_stream(
       fn changesets ->
@@ -316,7 +326,7 @@ defmodule Bulkinup do
         try do
           {:ok, chunk_result} =
             repo_module.transaction(
-              fn -> upsert_chunk(schema_module, changesets, config) end,
+              fn -> write_chunk(schema_module, changesets, config) end,
               timeout: config.timeout
             )
 
@@ -334,9 +344,9 @@ defmodule Bulkinup do
     end)
   end
 
-  # Validate, recover, and upsert one chunk of parent changesets, returning the chunk's counts
+  # Validate, recover, and write one chunk of parent changesets, returning the chunk's counts
   # and the primary keys of its skipped items (capped, for the end-of-call summary log)
-  defp upsert_chunk(schema_module, changesets, config) do
+  defp write_chunk(schema_module, changesets, config) do
     {valid_changesets, invalid_changesets} =
       changesets
       |> recover_changesets_with_recoverable_errors(config.recover_changeset_errors)
@@ -344,10 +354,10 @@ defmodule Bulkinup do
 
     Enum.each(invalid_changesets, &log_on_upsert_changeset_error(schema_module, &1))
 
-    if valid_changesets != [], do: do_upsert(schema_module, valid_changesets, config)
+    if valid_changesets != [], do: do_bulk_write(schema_module, valid_changesets, config)
 
     %{
-      upserted: length(valid_changesets),
+      written: length(valid_changesets),
       skipped: length(invalid_changesets),
       skipped_item_ids:
         invalid_changesets
@@ -359,13 +369,13 @@ defmodule Bulkinup do
   # Sum the per-chunk counts, keeping the skipped-item IDs capped so an arbitrarily long input
   # cannot accumulate unbounded log metadata
   defp aggregate_chunk_results(chunk_results) do
-    initial_totals = %{upserted: 0, skipped: 0, skipped_item_ids: []}
+    initial_totals = %{written: 0, skipped: 0, skipped_item_ids: []}
 
     Enum.reduce(chunk_results, initial_totals, fn chunk_result, totals ->
       remaining_id_slots = @skipped_item_ids_log_limit - length(totals.skipped_item_ids)
 
       %{
-        upserted: totals.upserted + chunk_result.upserted,
+        written: totals.written + chunk_result.written,
         skipped: totals.skipped + chunk_result.skipped,
         skipped_item_ids:
           totals.skipped_item_ids ++ Enum.take(chunk_result.skipped_item_ids, remaining_id_slots)
@@ -501,7 +511,7 @@ defmodule Bulkinup do
   end
 
   defp attrs_from_changeset(changeset) do
-    struct = Ecto.Changeset.apply_action!(changeset, :build_for_upsert)
+    struct = Ecto.Changeset.apply_action!(changeset, :bulk_write)
 
     struct
     |> Map.from_struct()
@@ -539,11 +549,12 @@ defmodule Bulkinup do
     end)
   end
 
-  defp do_upsert(schema_module, changesets, config) do
-    %{insert_all_opts: insert_all_opts, replace_all_except: replace_all_except, timeout: timeout} =
-      config
+  # Write one schema's rows and recurse into its associations, applying the verb's default
+  # conflict behavior (see `default_schema_insert_all_opts/3`) at every level
+  defp do_bulk_write(schema_module, changesets, config) do
+    %{insert_all_opts: insert_all_opts} = config
 
-    # Perform bulk upsert for all parent attrs
+    # Perform the bulk write for all parent attrs
     attrs_list =
       changesets
       # Drop all assoc data from the changeset (assocs are handled separately in a later step)
@@ -553,18 +564,13 @@ defmodule Bulkinup do
     # Build `insert_all` opts for the parent schema
     parent_insert_all_opts =
       Keyword.merge(
-        _default_parent_insert_all_opts = [
-          conflict_target: schema_module.__schema__(:primary_key),
-          on_conflict:
-            {:replace_all_except, schema_module.__schema__(:primary_key) ++ replace_all_except},
-          timeout: timeout
-        ],
+        default_schema_insert_all_opts(config.verb, schema_module, config),
         insert_all_opts[schema_module] || []
       )
 
     insert_all_entries(attrs_list, schema_module, parent_insert_all_opts, config)
 
-    # Perform bulk upsert for all `has_many` and `has_one` associations
+    # Perform the bulk write for all `has_many` and `has_one` associations
     for association <- get_schema_associations(schema_module, :has) do
       association_schema_module =
         schema_module.__changeset__()[association] |> elem(1) |> Map.fetch!(:related)
@@ -578,11 +584,11 @@ defmodule Bulkinup do
         # (possibly empty) list, which `flat_map` concatenates.
         |> Enum.flat_map(&List.wrap/1)
 
-      # Recurse so each child's own nested associations are upserted as well
-      do_upsert(association_schema_module, association_changesets, config)
+      # Recurse so each child's own nested associations are written as well
+      do_bulk_write(association_schema_module, association_changesets, config)
     end
 
-    # Perform bulk upsert for all `many_to_many` associations
+    # Perform the bulk write for all `many_to_many` associations
     for association <- get_schema_associations(schema_module, :many_to_many) do
       %Ecto.Association.ManyToMany{
         related: related_schema_module,
@@ -600,7 +606,7 @@ defmodule Bulkinup do
           |> Enum.map(fn related_changeset -> {parent_changeset, related_changeset} end)
         end)
 
-      # Upsert the related records into their own table. The same record may be referenced by
+      # Write the related records into their own table. The same record may be referenced by
       # multiple parents, so duplicates are removed to avoid conflicting twice in one query.
       related_changesets =
         parent_related_pairs
@@ -610,10 +616,10 @@ defmodule Bulkinup do
           |> Enum.map(&Ecto.Changeset.get_field(related_changeset, &1))
         end)
 
-      # Recurse so each related record's own nested associations are upserted as well
-      do_upsert(related_schema_module, related_changesets, config)
+      # Recurse so each related record's own nested associations are written as well
+      do_bulk_write(related_schema_module, related_changesets, config)
 
-      # Upsert the join table rows that link each parent to its related records. The same link
+      # Write the join table rows that link each parent to its related records. The same link
       # may be listed more than once, so duplicate rows are removed for the same reason.
       join_attrs_list =
         parent_related_pairs
@@ -627,11 +633,7 @@ defmodule Bulkinup do
 
       join_insert_all_opts =
         Keyword.merge(
-          [
-            on_conflict: :nothing,
-            conflict_target: [owner_join_key, related_join_key],
-            timeout: timeout
-          ],
+          default_join_insert_all_opts(config.verb, [owner_join_key, related_join_key], config),
           insert_all_opts[join_through] || []
         )
 
@@ -642,6 +644,23 @@ defmodule Bulkinup do
         config
       )
     end
+  end
+
+  # Default `insert_all` opts for a schema's own rows, per verb. An upsert conflicts on the
+  # primary key and replaces every other field (minus `:replace_all_except`).
+  defp default_schema_insert_all_opts(:upsert, schema_module, config) do
+    [
+      conflict_target: schema_module.__schema__(:primary_key),
+      on_conflict:
+        {:replace_all_except, schema_module.__schema__(:primary_key) ++ config.replace_all_except},
+      timeout: config.timeout
+    ]
+  end
+
+  # Default `insert_all` opts for a `many_to_many` join table's rows, per verb. An upsert
+  # ignores links that already exist.
+  defp default_join_insert_all_opts(:upsert, join_keys, config) do
+    [on_conflict: :nothing, conflict_target: join_keys, timeout: config.timeout]
   end
 
   # Association changes cannot pass through `insert_all/3`, so they are dropped from the row's
@@ -860,7 +879,7 @@ defmodule Bulkinup do
 
     Logger.warning(
       """
-      Skipped #{totals.skipped} of #{totals.upserted + totals.skipped} items because their \
+      Skipped #{totals.skipped} of #{totals.written + totals.skipped} items because their \
       changesets had unrecoverable errors. The skipped items were not upserted. Details for \
       each skipped item are logged at the `:debug` level.#{truncation_note}\
       """,
