@@ -1,8 +1,8 @@
 import Config
 
-config :bulk_upsert, ecto_repos: [BulkinupDemo.Repo]
+config :bulkinup, ecto_repos: [BulkinupDemo.Repo]
 
-config :bulk_upsert, BulkinupDemo.Repo,
+config :bulkinup, BulkinupDemo.Repo,
   username: System.get_env("POSTGRES_USER", "postgres"),
   password: System.get_env("POSTGRES_PASSWORD", "postgres"),
   database: "bulkinup_demo",

@@ -1,13 +1,13 @@
-defmodule BulkUpsert.MixProject do
+defmodule Bulkinup.MixProject do
   use Mix.Project
 
-  @project_name "Bulk Upsert"
-  @source_url "https://github.com/arcanemachine/bulk_upsert"
+  @project_name "Bulkinup"
+  @source_url "https://github.com/arcanemachine/bulkinup"
   @version "0.5.0"
 
   def project do
     [
-      app: :bulk_upsert,
+      app: :bulkinup,
       version: @version,
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -16,8 +16,7 @@ defmodule BulkUpsert.MixProject do
       deps: deps(),
 
       # Hex
-      description:
-        "Upsert multiple nested Ecto schema structs to the database with a single function call.",
+      description: "Bulk inserts and upserts for nested Ecto schemas.",
       package: package(),
 
       # Docs
@@ -62,6 +61,10 @@ defmodule BulkUpsert.MixProject do
     [
       extras: [
         "README.md": [title: "Readme"],
+        "guides/getting_started.md": [title: "Getting Started"],
+        "guides/nested_associations.md": [title: "Nested Associations"],
+        "guides/recipes.md": [title: "Recipes"],
+        "guides/migrating_from_bulk_upsert.md": [title: "Migrating from bulk_upsert"],
         "CHANGELOG.md": [title: "Changelog"]
       ],
       formatters: ["html"],
@@ -75,7 +78,7 @@ defmodule BulkUpsert.MixProject do
       maintainers: ["Nicholas Moen"],
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      files: ~w(.formatter.exs mix.exs README.md CHANGELOG.md lib)
+      files: ~w(.formatter.exs mix.exs README.md CHANGELOG.md lib guides)
     ]
   end
 end

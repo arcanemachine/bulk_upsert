@@ -1,6 +1,6 @@
 defmodule BulkinupDemo.Repo do
   use Ecto.Repo,
-    otp_app: :bulk_upsert,
+    otp_app: :bulkinup,
     adapter: Ecto.Adapters.Postgres
 
   @doc """
