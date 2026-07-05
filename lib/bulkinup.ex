@@ -25,8 +25,12 @@ defmodule Bulkinup do
   # inside `:insert_all_opts` values as well
   @options_misplaced_inside_insert_all_opts @valid_options -- [:timeout, :placeholders]
 
+  # Options that only make sense for an upsert; `insert/4` raises when given one
+  @upsert_only_options [:replace_all_except]
+
   @typedoc """
-  Options accepted by `upsert/4`. See that function's documentation for details.
+  Options accepted by `insert/4` and `upsert/4`. See `upsert/4`'s documentation for details.
+  `:replace_all_except` is upsert-only: `insert/4` raises an `ArgumentError` when given it.
 
   Map keys typed `module() | Ecto.Schema.source()` accept a schema module or, for
   `many_to_many` join tables, the source as a string (e.g. `"persons_topics"`).
@@ -244,10 +248,48 @@ defmodule Bulkinup do
     bulk_write(:upsert, repo_module, schema_module, attrs_list, opts)
   end
 
+  @doc """
+  Like `upsert/4`, but a pure bulk insert: rows are only ever created, never updated.
+
+  No `on_conflict` or `conflict_target` defaults are applied at any level — the parent schema,
+  nested associations, and `many_to_many` join tables all use Ecto's default conflict behavior,
+  so inserting a row (or join table link) that already exists raises (a `Postgrex.Error` unique
+  violation on Postgres). By default the entire insert runs in a single transaction, so every
+  change is rolled back when a duplicate raises.
+
+  To tolerate children or join rows shared with data that is already in the database (e.g.
+  `many_to_many` records that several parents reference), override the conflict behavior for
+  just those sources via `:insert_all_opts`:
+
+      iex> Bulkinup.insert(
+      ...>   YourProject.Repo,
+      ...>   YourProject.Blog.Post,
+      ...>   attrs_list,
+      ...>   insert_all_opts: %{
+      ...>     YourProject.Blog.Tag => [on_conflict: :nothing],
+      ...>     "posts_tags" => [on_conflict: :nothing]
+      ...>   }
+      ...> )
+      {:ok, %{inserted: 2, skipped: 0}}
+
+  Returns `{:ok, %{inserted: inserted_count, skipped: skipped_count}}`, with the same meaning
+  as `upsert/4`'s counts.
+
+  Everything else — changeset validation, `:recover_changeset_errors`, `:placeholders`,
+  chunking, streaming input, `:max_concurrency`, `:timeout`, and the skipped-items summary
+  logging — behaves exactly as documented for `upsert/4`. The upsert-only option
+  `:replace_all_except` raises an `ArgumentError`.
+  """
+  @spec insert(module(), module(), Enumerable.t(map()), options()) ::
+          {:ok, %{inserted: non_neg_integer(), skipped: non_neg_integer()}}
+  def insert(repo_module, schema_module, attrs_list, opts \\ []) do
+    bulk_write(:insert, repo_module, schema_module, attrs_list, opts)
+  end
+
   # The shared write engine: validate, chunk, write, and summarize. Verb-specific behavior
   # (conflict defaults and the verb's count key) dispatches on `config.verb`.
   defp bulk_write(verb, repo_module, schema_module, attrs_list, opts) do
-    validate_opts!(opts)
+    validate_opts!(verb, opts)
 
     # Parse all options once; `config` is threaded through every helper below
     config = %{
@@ -289,13 +331,18 @@ defmodule Bulkinup do
       |> write_chunks(repo_module, schema_module, config)
       |> aggregate_chunk_results()
 
-    if totals.skipped > 0, do: log_skipped_changesets_summary(schema_module, totals)
+    if totals.skipped > 0, do: log_skipped_changesets_summary(schema_module, totals, verb)
 
     {:ok, %{count_key(verb) => totals.written, skipped: totals.skipped}}
   end
 
   # The key the verb's written count is returned under
+  defp count_key(:insert), do: :inserted
   defp count_key(:upsert), do: :upserted
+
+  # The verb as it appears in log prose
+  defp verb_past_tense(:insert), do: "inserted"
+  defp verb_past_tense(:upsert), do: "upserted"
 
   # Write every chunk sequentially, wrapped in a single transaction so that any failure rolls
   # back all changes made to every chunk of parents and all of their associations
@@ -352,7 +399,7 @@ defmodule Bulkinup do
       |> recover_changesets_with_recoverable_errors(config.recover_changeset_errors)
       |> Enum.split_with(& &1.valid?)
 
-    Enum.each(invalid_changesets, &log_on_upsert_changeset_error(schema_module, &1))
+    Enum.each(invalid_changesets, &log_on_changeset_error(schema_module, &1, config.verb))
 
     if valid_changesets != [], do: do_bulk_write(schema_module, valid_changesets, config)
 
@@ -390,10 +437,11 @@ defmodule Bulkinup do
     end)
   end
 
-  # Raise on unknown option names, and on Bulkinup-level options nested inside
-  # `:insert_all_opts` values. The keys of each `:insert_all_opts` value are otherwise not
-  # checked, since the set of valid `insert_all/3` options belongs to Ecto.
-  defp validate_opts!(opts) do
+  # Raise on unknown option names, on upsert-only options given to `insert/4`, and on
+  # Bulkinup-level options nested inside `:insert_all_opts` values. The keys of each
+  # `:insert_all_opts` value are otherwise not checked, since the set of valid `insert_all/3`
+  # options belongs to Ecto.
+  defp validate_opts!(verb, opts) do
     unknown_options = opts |> Keyword.keys() |> Enum.uniq() |> Kernel.--(@valid_options)
 
     if unknown_options != [] do
@@ -401,6 +449,18 @@ defmodule Bulkinup do
       unknown option(s) #{inspect(unknown_options)}.
 
       Valid options: #{inspect(@valid_options)}\
+      """
+    end
+
+    upsert_only_options =
+      if verb == :insert,
+        do: opts |> Keyword.keys() |> Enum.uniq() |> Enum.filter(&(&1 in @upsert_only_options)),
+        else: []
+
+    if upsert_only_options != [] do
+      raise ArgumentError, """
+      the option(s) #{inspect(upsert_only_options)} only apply to an upsert, and are not \
+      supported by `insert/4`. Use `upsert/4` instead, or drop the option(s).\
       """
     end
 
@@ -646,8 +706,13 @@ defmodule Bulkinup do
     end
   end
 
-  # Default `insert_all` opts for a schema's own rows, per verb. An upsert conflicts on the
-  # primary key and replaces every other field (minus `:replace_all_except`).
+  # Default `insert_all` opts for a schema's own rows, per verb. An insert sets no conflict
+  # options at all, so a duplicate row raises (Ecto's default behavior); an upsert conflicts on
+  # the primary key and replaces every other field (minus `:replace_all_except`).
+  defp default_schema_insert_all_opts(:insert, _schema_module, config) do
+    [timeout: config.timeout]
+  end
+
   defp default_schema_insert_all_opts(:upsert, schema_module, config) do
     [
       conflict_target: schema_module.__schema__(:primary_key),
@@ -657,8 +722,13 @@ defmodule Bulkinup do
     ]
   end
 
-  # Default `insert_all` opts for a `many_to_many` join table's rows, per verb. An upsert
-  # ignores links that already exist.
+  # Default `insert_all` opts for a `many_to_many` join table's rows, per verb. An insert sets
+  # no conflict options here either, so a duplicate link raises just like a duplicate row; an
+  # upsert ignores links that already exist.
+  defp default_join_insert_all_opts(:insert, _join_keys, config) do
+    [timeout: config.timeout]
+  end
+
   defp default_join_insert_all_opts(:upsert, join_keys, config) do
     [on_conflict: :nothing, conflict_target: join_keys, timeout: config.timeout]
   end
@@ -687,7 +757,7 @@ defmodule Bulkinup do
     |> Keyword.keys()
   end
 
-  defp log_on_upsert_changeset_error(schema_module, changeset) do
+  defp log_on_changeset_error(schema_module, changeset, verb) do
     item_id_or_ids = changeset_primary_key(schema_module, changeset)
 
     invalid_parent_attrs =
@@ -735,9 +805,9 @@ defmodule Bulkinup do
     Logger.debug(
       """
       This changeset has one or more unrecoverable errors. The item associated with this \
-      changeset will not be upserted.\
+      changeset will not be #{verb_past_tense(verb)}.\
       """,
-      reason: :upsert_changeset_error,
+      reason: changeset_error_reason(verb),
       schema_module: inspect(schema_module),
       item_id_or_ids: item_id_or_ids,
       # NOTE: If one item in an array contains an invalid value, the whole array will be logged
@@ -868,10 +938,10 @@ defmodule Bulkinup do
     %{changeset | changes: Map.put(changeset.changes, field, recover_to_value)}
   end
 
-  # One `:warning` per bulk upsert call summarizes every skipped item, accumulated across all
-  # chunks. The per-item details are logged at the `:debug` level, so a large batch of invalid
-  # rows cannot flood the log.
-  defp log_skipped_changesets_summary(schema_module, totals) do
+  # One `:warning` per call summarizes every skipped item, accumulated across all chunks. The
+  # per-item details are logged at the `:debug` level, so a large batch of invalid rows cannot
+  # flood the log.
+  defp log_skipped_changesets_summary(schema_module, totals, verb) do
     truncation_note =
       if totals.skipped > @skipped_item_ids_log_limit,
         do: " The first #{@skipped_item_ids_log_limit} skipped item IDs are listed.",
@@ -880,13 +950,21 @@ defmodule Bulkinup do
     Logger.warning(
       """
       Skipped #{totals.skipped} of #{totals.written + totals.skipped} items because their \
-      changesets had unrecoverable errors. The skipped items were not upserted. Details for \
-      each skipped item are logged at the `:debug` level.#{truncation_note}\
+      changesets had unrecoverable errors. The skipped items were not \
+      #{verb_past_tense(verb)}. Details for each skipped item are logged at the `:debug` \
+      level.#{truncation_note}\
       """,
-      reason: :upsert_items_skipped,
+      reason: items_skipped_reason(verb),
       schema_module: inspect(schema_module),
       skipped_count: totals.skipped,
       item_ids: totals.skipped_item_ids
     )
   end
+
+  # Log metadata `:reason` atoms, per verb
+  defp changeset_error_reason(:insert), do: :insert_changeset_error
+  defp changeset_error_reason(:upsert), do: :upsert_changeset_error
+
+  defp items_skipped_reason(:insert), do: :insert_items_skipped
+  defp items_skipped_reason(:upsert), do: :upsert_items_skipped
 end

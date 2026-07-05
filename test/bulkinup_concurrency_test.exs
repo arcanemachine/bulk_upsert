@@ -15,6 +15,15 @@ defmodule BulkinupConcurrencyTest do
              Enum.map(1..5, &"author-#{&1}")
   end
 
+  test "inserts chunks concurrently, each in its own transaction" do
+    attrs_list = Enum.map(1..5, fn id -> %{id: id, name: "author-#{id}"} end)
+
+    {:ok, %{inserted: 5, skipped: 0}} =
+      Bulkinup.insert(Repo, Author, attrs_list, chunk_size: 2, max_concurrency: 2)
+
+    assert Repo.aggregate(Author, :count) == 5
+  end
+
   test "composes with a Stream as attrs input" do
     attrs_stream = Stream.map(1..5, fn id -> %{id: id, name: "author-#{id}"} end)
 

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- `Bulkinup.insert/4`: a pure bulk insert of nested schemas. No `on_conflict` or
+  `conflict_target` defaults are applied at any level (including `many_to_many` join tables),
+  so a duplicate raises. Returns `{:ok, %{inserted: n, skipped: n}}`. The upsert-only option
+  `:replace_all_except` raises an `ArgumentError`
+
 ## v0.5.0 - 2026-07-04
 
 ### Added
