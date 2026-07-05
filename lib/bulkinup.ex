@@ -1,5 +1,24 @@
 defmodule Bulkinup do
-  @moduledoc "Bulk upsert Ecto structs and their nested associations in one call."
+  @moduledoc """
+  Bulk inserts and upserts for nested Ecto schemas.
+
+  Ecto's `c:Ecto.Repo.insert_all/3` writes one flat table at a time and skips changeset
+  validation. Bulkinup fills that gap: it validates attrs maps through your schemas' changeset
+  functions, then writes a parent **and its nested associations across multiple tables** in one
+  call, wrapped in a single transaction by default.
+
+  Two sibling verbs share the same engine, options, and semantics:
+
+  - `upsert/4` — bulk upsert: existing rows are updated on conflict.
+  - `insert/4` — pure bulk insert: writing a row that already exists raises.
+
+  `use Bulkinup` (see `__using__/1`) injects repo-scoped `bulk_insert/3` and `bulk_upsert/3`
+  into your repo module, with app-wide defaults declared once at `use` time.
+
+  For a walkthrough, see the guides: [Getting Started](getting_started.html),
+  [Nested Associations](nested_associations.html), [Recipes](recipes.html), and
+  [Migrating from bulk_upsert](migrating_from_bulk_upsert.html).
+  """
 
   require Logger
 

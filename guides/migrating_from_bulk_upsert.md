@@ -1,0 +1,79 @@
+# Migrating from bulk_upsert
+
+Bulkinup is the continuation of the
+[`bulk_upsert`](https://hex.pm/packages/bulk_upsert) package: versions <= 0.5.x were released
+as `bulk_upsert`, and 0.6.0 is the first release as `bulkinup`. The upsert behavior is
+unchanged — for existing callers the migration is a rename.
+
+## 1. Swap the dependency
+
+In `mix.exs`:
+
+```elixir
+# Before
+{:bulk_upsert, "~> 0.5.0"}
+
+# After
+{:bulkinup, "~> 0.6.0"}
+```
+
+Then `mix deps.get`. (All `bulk_upsert` versions are retired on Hex — they still resolve and
+compile, but every `deps.get` warns until you switch.)
+
+## 2. Rename the call
+
+`BulkUpsert.bulk_upsert/4` is now `Bulkinup.upsert/4` — same arguments, same options, same
+return shape:
+
+```elixir
+# Before
+BulkUpsert.bulk_upsert(YourProject.Repo, Person, attrs_list, opts)
+
+# After
+Bulkinup.upsert(YourProject.Repo, Person, attrs_list, opts)
+```
+
+`{:ok, %{upserted: n, skipped: n}}` is unchanged, so `with`/`case` matches on the return keep
+working as-is.
+
+## 3. (Optional) Replace a hand-rolled wrapper with `use Bulkinup`
+
+If your repo module wraps the old call — the pattern the bulk_upsert README recommended —
+consider `use Bulkinup`, which injects `bulk_insert/3` and `bulk_upsert/3` with app-wide
+defaults declared once:
+
+```elixir
+defmodule YourProject.Repo do
+  use Ecto.Repo,
+    otp_app: :your_project,
+    adapter: Ecto.Adapters.Postgres
+
+  use Bulkinup,
+    upsert: [replace_all_except: [:inserted_at]]
+end
+```
+
+> #### Delete the wrapper first {: .warning}
+>
+> `use Bulkinup` injects plain `def`s, so a module that still defines its own `bulk_upsert/3`
+> fails to compile. Delete the old wrapper function, then add `use Bulkinup`. Move any
+> defaults the wrapper hard-coded into the `use` options (see `Bulkinup.__using__/1`).
+
+## Log metadata
+
+If you filter logs on the library's `:reason` metadata, two atoms were renamed with the
+function:
+
+- `:bulk_upsert_changeset_error` is now `:upsert_changeset_error`
+- `:bulk_upsert_items_skipped` is now `:upsert_items_skipped`
+
+(`insert/4` uses `:insert_changeset_error` and `:insert_items_skipped`.)
+
+## What's new since 0.5.x
+
+The rename repositions the library around nested bulk *writes*, with two sibling verbs:
+
+- `Bulkinup.insert/4` — pure bulk insert: no conflict defaults anywhere, duplicates raise.
+- `use Bulkinup` — repo-scoped calls with compile-time-validated, app-wide defaults.
+
+See the [changelog](changelog.html) for details.
