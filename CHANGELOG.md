@@ -5,7 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Versions <= 0.5.x were released as
+[`bulk_upsert`](https://hex.pm/packages/bulk_upsert).
+
 ## Unreleased
+
+### Changed
+
+- **Breaking:** The package is renamed from `bulk_upsert` to `bulkinup`, and
+  `BulkUpsert.bulk_upsert/4` is now `Bulkinup.upsert/4` — same arguments, same options, same
+  return shape. See the [migration guide](migrating_from_bulk_upsert.html)
+- **Breaking:** The log metadata `:reason` atoms follow the rename:
+  `:bulk_upsert_changeset_error` is now `:upsert_changeset_error`, and
+  `:bulk_upsert_items_skipped` is now `:upsert_items_skipped` (with `:insert_changeset_error`
+  and `:insert_items_skipped` as the `insert/4` counterparts)
 
 ### Added
 
