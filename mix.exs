@@ -3,7 +3,7 @@ defmodule Bulkinup.MixProject do
 
   @project_name "Bulkinup"
   @source_url "https://github.com/arcanemachine/bulkinup"
-  @version "0.5.0"
+  @version "0.6.0"
 
   def project do
     [
