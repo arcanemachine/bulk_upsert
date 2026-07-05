@@ -1,7 +1,7 @@
 defmodule BulkinupDemo.MacroRepo do
   @moduledoc """
   A `use Bulkinup` demo module exercising every kind of `use`-time default: a flat key
-  (`:insert_all_function_module`), a flat key with a dynamic (runtime-evaluated) value
+  (`:insert_all_module`), a flat key with a dynamic (runtime-evaluated) value
   (`:timeout`), a flat upsert-only key (`:replace_all_except`), a flat key overridden per verb
   (`:chunk_size`), and a per-verb namespace override (`upsert: [replace_all_except: ...]`).
 
@@ -10,7 +10,7 @@ defmodule BulkinupDemo.MacroRepo do
   """
 
   use Bulkinup,
-    insert_all_function_module: BulkinupDemo.ProxyRepo,
+    insert_all_module: BulkinupDemo.ProxyRepo,
     timeout: default_timeout(),
     replace_all_except: [:phone_number],
     chunk_size: 3,

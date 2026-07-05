@@ -44,8 +44,8 @@ Bulkinup.upsert(
 ```
 
 If you need per-call logic that placeholders cannot express, pass a custom function that
-accepts the same arguments as `insert_all/3` via the `:insert_all_function_atom` (or
-`:insert_all_function_module`) option — see the options in `Bulkinup.upsert/4`.
+accepts the same arguments as `insert_all/3` via the `:insert_all_function` (or
+`:insert_all_module`) option — see the options in `Bulkinup.upsert/4`.
 
 ## Inserting alongside shared `many_to_many` children
 

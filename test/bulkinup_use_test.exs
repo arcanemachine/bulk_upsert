@@ -6,7 +6,7 @@ defmodule BulkinupUseTest do
 
   # MacroRepo's `use Bulkinup` defaults, for reference in the tests below:
   #
-  #     insert_all_function_module: BulkinupDemo.ProxyRepo,
+  #     insert_all_module: BulkinupDemo.ProxyRepo,
   #     timeout: default_timeout(),               # dynamic; returns 12_345 at runtime
   #     replace_all_except: [:phone_number],      # flat upsert-only key
   #     chunk_size: 3,

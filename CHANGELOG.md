@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Versions <= 0.5.x were released as
 [`bulk_upsert`](https://hex.pm/packages/bulk_upsert).
 
+## Unreleased
+
+### Changed
+
+- **Breaking:** The function-override options are renamed to idiomatic names:
+  `:changeset_function_atom` is now `:changeset_function`, `:insert_all_function_atom` is now
+  `:insert_all_function`, and `:insert_all_function_module` is now `:insert_all_module`. The
+  old names raise an `ArgumentError` (at compile time when given to `use Bulkinup`)
+
 ## v0.6.0 - 2026-07-05
 
 ### Changed

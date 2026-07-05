@@ -1,6 +1,6 @@
 defmodule BulkinupDemo.ProxyRepo do
   @moduledoc """
-  An `:insert_all_function_module` that records each call by messaging the calling process, then
+  An `:insert_all_module` that records each call by messaging the calling process, then
   delegates to the real repo.
 
   `Bulkinup.upsert/4` runs its transaction in the calling process, so a test that passes

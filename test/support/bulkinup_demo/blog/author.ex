@@ -28,7 +28,7 @@ defmodule BulkinupDemo.Blog.Author do
     |> cast_embed(:social_links)
   end
 
-  @doc "An alternative changeset that only accepts an `:id`, for the `:changeset_function_atom` demo."
+  @doc "An alternative changeset that only accepts an `:id`, for the `:changeset_function` demo."
   def upsert_changeset(author \\ %__MODULE__{}, attrs) do
     author
     |> cast(attrs, [:id])
