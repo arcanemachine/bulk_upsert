@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `bulk_upsert/4` now raises an `ArgumentError` on unknown option names, and on
+  BulkUpsert options nested inside `:insert_all_opts` values (previously both were silently
+  ignored). `:timeout` and `:placeholders` remain valid inside `:insert_all_opts`, since
+  `insert_all/3` also accepts them
 - Skipped rows are now summarized in a single `:warning` log per call (schema, counts, and up to
   50 skipped primary keys in the metadata), with per-row detail moved to the `:debug` level.
   Previously each skipped row logged its own `:warning`, which could flood the log during large

@@ -8,6 +8,22 @@ defmodule BulkUpsert do
   # Cap the number of skipped-item IDs included in the summary warning's metadata
   @skipped_item_ids_log_limit 50
 
+  @valid_options [
+    :changeset_function_atom,
+    :chunk_size,
+    :insert_all_function_atom,
+    :insert_all_function_module,
+    :insert_all_opts,
+    :placeholders,
+    :recover_changeset_errors,
+    :replace_all_except,
+    :timeout
+  ]
+
+  # `:timeout` and `:placeholders` are also valid `insert_all/3` options, so they may appear
+  # inside `:insert_all_opts` values as well
+  @options_misplaced_inside_insert_all_opts @valid_options -- [:timeout, :placeholders]
+
   @typedoc """
   Options accepted by `bulk_upsert/4`. See that function's documentation for details.
 
@@ -64,6 +80,10 @@ defmodule BulkUpsert do
   database error rolls back the entire upsert and raises.
 
   ## Options
+
+  Unknown option names raise an `ArgumentError`, as does passing a BulkUpsert option (other than
+  `:timeout` or `:placeholders`, which `insert_all/3` also accepts) inside an `:insert_all_opts`
+  value.
 
   > #### Warning {: .warning}
   >
@@ -192,6 +212,8 @@ defmodule BulkUpsert do
   @spec bulk_upsert(module(), module(), [map()], options()) ::
           {:ok, %{upserted: non_neg_integer(), skipped: non_neg_integer()}}
   def bulk_upsert(repo_module, schema_module, attrs_list, opts \\ []) do
+    validate_opts!(opts)
+
     # Parse all options once; `config` is threaded through every helper below
     config = %{
       changeset_function_atom: Keyword.get(opts, :changeset_function_atom, :changeset),
@@ -243,6 +265,49 @@ defmodule BulkUpsert do
 
     upserted_count = length(valid_changesets)
     {:ok, %{upserted: upserted_count, skipped: length(attrs_list) - upserted_count}}
+  end
+
+  # Raise on unknown option names, and on BulkUpsert-level options nested inside
+  # `:insert_all_opts` values. The keys of each `:insert_all_opts` value are otherwise not
+  # checked, since the set of valid `insert_all/3` options belongs to Ecto.
+  defp validate_opts!(opts) do
+    unknown_options = opts |> Keyword.keys() |> Enum.uniq() |> Kernel.--(@valid_options)
+
+    if unknown_options != [] do
+      raise ArgumentError, """
+      unknown option(s) #{inspect(unknown_options)}.
+
+      Valid options: #{inspect(@valid_options)}\
+      """
+    end
+
+    insert_all_opts = Keyword.get(opts, :insert_all_opts, %{})
+
+    if not is_map(insert_all_opts) do
+      raise ArgumentError, """
+      the `:insert_all_opts` option must be a map of `schema_or_source => insert_all_opts`, \
+      got: #{inspect(insert_all_opts)}\
+      """
+    end
+
+    Enum.each(insert_all_opts, fn {schema_or_source, schema_insert_all_opts} ->
+      misplaced_options =
+        if Keyword.keyword?(schema_insert_all_opts),
+          do:
+            schema_insert_all_opts
+            |> Keyword.keys()
+            |> Enum.uniq()
+            |> Enum.filter(&(&1 in @options_misplaced_inside_insert_all_opts)),
+          else: []
+
+      if misplaced_options != [] do
+        raise ArgumentError, """
+        the option(s) #{inspect(misplaced_options)} given for #{inspect(schema_or_source)} are \
+        BulkUpsert options, and have no effect inside `:insert_all_opts`. Pass them at the top \
+        level of `opts` instead.\
+        """
+      end
+    end)
   end
 
   # Inject the placeholder values configured for a schema into an attrs map, recursing into the

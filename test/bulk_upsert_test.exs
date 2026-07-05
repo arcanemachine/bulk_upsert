@@ -335,6 +335,37 @@ defmodule BulkUpsertTest do
     assert Repo.all(from a in Author, select: {a.id, a.name}) == [{1, "valid"}]
   end
 
+  test "raises on unknown options" do
+    assert_raise ArgumentError, ~r/unknown option\(s\) \[:chunck_size\]/, fn ->
+      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}], chunck_size: 100)
+    end
+  end
+
+  test "raises on a BulkUpsert option nested inside insert_all_opts" do
+    assert_raise ArgumentError, ~r/no effect inside `:insert_all_opts`/, fn ->
+      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}],
+        insert_all_opts: %{Author => [replace_all_except: [:name]]}
+      )
+    end
+  end
+
+  test "raises when insert_all_opts is not a map" do
+    assert_raise ArgumentError, ~r/must be a map/, fn ->
+      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}],
+        insert_all_opts: [on_conflict: :nothing]
+      )
+    end
+  end
+
+  test "allows :timeout and :placeholders inside insert_all_opts" do
+    {:ok, _} =
+      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}],
+        insert_all_opts: %{Author => [timeout: 30_000, placeholders: %{}]}
+      )
+
+    assert Repo.get!(Author, 1).name == "Alice"
+  end
+
   test "logs one warning summarizing all skipped rows" do
     attrs_list = [%{id: 1}, %{id: 2}, %{id: 3, name: "valid"}]
 
