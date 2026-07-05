@@ -1,5 +1,5 @@
 defmodule BulkUpsert do
-  @moduledoc "Bulk upsert a list of Ecto structs and their nested associations in one call."
+  @moduledoc "Bulk upsert Ecto structs and their nested associations in one call."
 
   require Logger
 
@@ -58,7 +58,7 @@ defmodule BulkUpsert do
     1. The changeset can be used to validate and transform the data.
     2. Using a changeset allows this function to perform bulk upserts with nested associations.
 
-  For validation, each list item in the `attrs_list` is converted to a changeset for a given
+  For validation, each item in the `attrs_list` is converted to a changeset for a given
   `schema_module`. The changeset function is called with a single argument (the attrs map), so
   the schema module must expose a 1-arity changeset function — e.g. a `changeset/2` whose first
   argument defaults to an empty struct. By default, this function is called `:changeset`. (See
