@@ -14,7 +14,7 @@ In `mix.exs`:
 {:bulk_upsert, "~> 0.5.0"}
 
 # After
-{:bulkinup, "~> 0.6.0"}
+{:bulkinup, "~> 0.7.0"}
 ```
 
 Then `mix deps.get`. (All `bulk_upsert` versions are retired on Hex — they still resolve and
@@ -22,8 +22,8 @@ compile, but every `deps.get` warns until you switch.)
 
 ## 2. Rename the call
 
-`BulkUpsert.bulk_upsert/4` is now `Bulkinup.upsert/4` — same arguments, same options, same
-return shape:
+`BulkUpsert.bulk_upsert/4` is now `Bulkinup.upsert/4` — same arguments, same return shape,
+and the same options apart from the three renames below:
 
 ```elixir
 # Before
@@ -36,7 +36,18 @@ Bulkinup.upsert(YourProject.Repo, Person, attrs_list, opts)
 `{:ok, %{upserted: n, skipped: n}}` is unchanged, so `with`/`case` matches on the return keep
 working as-is.
 
-## 3. (Optional) Replace a hand-rolled wrapper with `use Bulkinup`
+## 3. Rename the function-override options
+
+Three options were renamed in 0.7.0:
+
+- `:changeset_function_atom` is now `:changeset_function`
+- `:insert_all_function_atom` is now `:insert_all_function`
+- `:insert_all_function_module` is now `:insert_all_module`
+
+An old name raises an `ArgumentError` that lists the valid options — at compile time when
+given to `use Bulkinup`, at call time otherwise.
+
+## 4. (Optional) Replace a hand-rolled wrapper with `use Bulkinup`
 
 If your repo module wraps the old call — the pattern the bulk_upsert README recommended —
 consider `use Bulkinup`, which injects `bulk_insert/3` and `bulk_upsert/3` with app-wide
