@@ -3,7 +3,7 @@ defmodule BulkUpsert.MixProject do
 
   @project_name "Bulk Upsert"
   @source_url "https://github.com/arcanemachine/bulk_upsert"
-  @version "0.3.0"
+  @version "0.4.0"
 
   def project do
     [
