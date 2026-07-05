@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `conflict_target` defaults are applied at any level (including `many_to_many` join tables),
   so a duplicate raises. Returns `{:ok, %{inserted: n, skipped: n}}`. The upsert-only option
   `:replace_all_except` raises an `ArgumentError`
+- `use Bulkinup`: injects repo-scoped `bulk_insert/3` and `bulk_upsert/3` into the calling
+  repo module, with shared defaults declared once at `use` time. Flat keys apply to each verb
+  they are valid for; `insert:`/`upsert:` namespaces hold per-verb defaults; per-call opts win.
+  Option names are validated at compile time, and values are evaluated per call at runtime, so
+  dynamic defaults work
 
 ## v0.5.0 - 2026-07-04
 

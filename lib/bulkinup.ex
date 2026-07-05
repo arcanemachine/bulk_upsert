@@ -28,6 +28,9 @@ defmodule Bulkinup do
   # Options that only make sense for an upsert; `insert/4` raises when given one
   @upsert_only_options [:replace_all_except]
 
+  # The verbs, as they appear in the `use Bulkinup` per-verb namespaces
+  @verbs [:insert, :upsert]
+
   @typedoc """
   Options accepted by `insert/4` and `upsert/4`. See `upsert/4`'s documentation for details.
   `:replace_all_except` is upsert-only: `insert/4` raises an `ArgumentError` when given it.
@@ -284,6 +287,116 @@ defmodule Bulkinup do
           {:ok, %{inserted: non_neg_integer(), skipped: non_neg_integer()}}
   def insert(repo_module, schema_module, attrs_list, opts \\ []) do
     bulk_write(:insert, repo_module, schema_module, attrs_list, opts)
+  end
+
+  @doc """
+  Injects `bulk_insert/3` and `bulk_upsert/3` into the calling repo module — `insert/4` and
+  `upsert/4` scoped to that repo, with shared defaults declared once at `use` time:
+
+      defmodule YourProject.Repo do
+        use Ecto.Repo, otp_app: :your_project, adapter: Ecto.Adapters.Postgres
+
+        use Bulkinup,
+          timeout: fetch_timeout!(),
+          insert: [chunk_size: 500],
+          upsert: [replace_all_except: [:inserted_at]]
+      end
+
+      YourProject.Repo.bulk_upsert(Person, attrs_list)
+      {:ok, %{upserted: 2, skipped: 0}}
+
+  ## Defaults and precedence
+
+  - A flat key (e.g. `timeout:` above) is a shared default, applied to each verb it is valid
+    for. The upsert-only `:replace_all_except` is applied to `bulk_upsert/3` only — though
+    passing it per-call to `bulk_insert/3` still raises, as it does for `insert/4`.
+  - The `insert:` and `upsert:` keys hold per-verb defaults.
+  - Precedence: per-call opts override the verb namespace, which overrides flat keys.
+
+  Option names are validated at compile time: a typo, or a key that is valid for no verb it
+  would apply to, is a compile error. Option *values* are injected unevaluated and evaluated
+  per call at runtime, so dynamic defaults (like `fetch_timeout!()` above, resolved in the
+  repo module) work.
+  """
+  defmacro __using__(use_opts) do
+    {flat_opts, verb_opts} = validate_use_opts!(use_opts)
+
+    insert_defaults = build_verb_defaults(:insert, flat_opts, verb_opts)
+    upsert_defaults = build_verb_defaults(:upsert, flat_opts, verb_opts)
+
+    quote do
+      @doc "`Bulkinup.insert/4` scoped to this repo, with the `use Bulkinup` defaults applied."
+      def bulk_insert(schema_module, attrs_list, opts \\ []) do
+        defaults = unquote(insert_defaults)
+        Bulkinup.insert(__MODULE__, schema_module, attrs_list, Keyword.merge(defaults, opts))
+      end
+
+      @doc "`Bulkinup.upsert/4` scoped to this repo, with the `use Bulkinup` defaults applied."
+      def bulk_upsert(schema_module, attrs_list, opts \\ []) do
+        defaults = unquote(upsert_defaults)
+        Bulkinup.upsert(__MODULE__, schema_module, attrs_list, Keyword.merge(defaults, opts))
+      end
+    end
+  end
+
+  # Validate the `use Bulkinup` option names at compile time. Values are AST and are not
+  # evaluated here — they are injected into the generated functions and evaluated per call.
+  defp validate_use_opts!(use_opts) do
+    if not Keyword.keyword?(use_opts) do
+      raise ArgumentError, """
+      `use Bulkinup` expects a literal keyword list of options, \
+      got: #{Macro.to_string(use_opts)}\
+      """
+    end
+
+    {verb_opts, flat_opts} = Keyword.split(use_opts, @verbs)
+
+    unknown_options = flat_opts |> Keyword.keys() |> Enum.uniq() |> Kernel.--(@valid_options)
+
+    if unknown_options != [] do
+      raise ArgumentError, """
+      unknown option(s) #{inspect(unknown_options)} given to `use Bulkinup`.
+
+      Valid options: #{inspect(@valid_options)}, plus the #{inspect(@verbs)} per-verb \
+      namespaces\
+      """
+    end
+
+    Enum.each(verb_opts, fn {verb, verb_defaults} ->
+      if not Keyword.keyword?(verb_defaults) do
+        raise ArgumentError, """
+        the `use Bulkinup` option `#{inspect(verb)}:` expects a literal keyword list of \
+        defaults for that verb, got: #{Macro.to_string(verb_defaults)}\
+        """
+      end
+
+      valid_verb_options = valid_options_for_verb(verb)
+
+      invalid_options =
+        verb_defaults |> Keyword.keys() |> Enum.uniq() |> Kernel.--(valid_verb_options)
+
+      if invalid_options != [] do
+        raise ArgumentError, """
+        invalid option(s) #{inspect(invalid_options)} in the `#{inspect(verb)}:` namespace \
+        given to `use Bulkinup`.
+
+        Valid options for `#{inspect(verb)}:`: #{inspect(valid_verb_options)}\
+        """
+      end
+    end)
+
+    {flat_opts, verb_opts}
+  end
+
+  defp valid_options_for_verb(:insert), do: @valid_options -- @upsert_only_options
+  defp valid_options_for_verb(:upsert), do: @valid_options
+
+  # Merge a verb's defaults at compile time (the values stay unevaluated AST): flat keys the
+  # verb accepts, overridden by the verb's namespace
+  defp build_verb_defaults(verb, flat_opts, verb_opts) do
+    flat_opts
+    |> Keyword.take(valid_options_for_verb(verb))
+    |> Keyword.merge(Keyword.get(verb_opts, verb, []))
   end
 
   # The shared write engine: validate, chunk, write, and summarize. Verb-specific behavior
