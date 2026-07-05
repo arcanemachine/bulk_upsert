@@ -394,6 +394,14 @@ defmodule BulkUpsert do
       """
     end
 
+    chunk_size = Keyword.get(opts, :chunk_size, 1000)
+
+    if not (is_integer(chunk_size) and chunk_size > 0) do
+      raise ArgumentError, """
+      the `:chunk_size` option must be a positive integer, got: #{inspect(chunk_size)}\
+      """
+    end
+
     max_concurrency = Keyword.get(opts, :max_concurrency)
 
     if not (is_nil(max_concurrency) or (is_integer(max_concurrency) and max_concurrency > 0)) do

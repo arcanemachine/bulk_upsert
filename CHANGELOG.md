@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it trades the single-transaction guarantee for insert throughput — see the option's
   documentation for the consequences before using it
 
+### Changed
+
+- `bulk_upsert/4` now raises an `ArgumentError` when `:chunk_size` is not a positive integer
+  (previously an invalid value failed deeper in the pipeline with an unclear error)
+
 ## v0.4.0 - 2026-07-04
 
 ### Changed

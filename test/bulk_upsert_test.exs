@@ -366,6 +366,12 @@ defmodule BulkUpsertTest do
     assert length(String.split(log, "Skipped")) == 2
   end
 
+  test "raises when chunk_size is not a positive integer" do
+    assert_raise ArgumentError, ~r/`:chunk_size` option must be a positive integer/, fn ->
+      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}], chunk_size: 0)
+    end
+  end
+
   test "raises when max_concurrency is not a positive integer" do
     assert_raise ArgumentError, ~r/must be a positive integer/, fn ->
       BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}], max_concurrency: 0)
