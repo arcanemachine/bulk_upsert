@@ -335,6 +335,43 @@ defmodule BulkUpsertTest do
     assert Repo.all(from a in Author, select: {a.id, a.name}) == [{1, "valid"}]
   end
 
+  test "accepts a Stream as attrs input, processing it in chunks" do
+    attach_insert_counter("authors")
+
+    attrs_stream = Stream.map(1..5, fn id -> %{id: id, name: "author-#{id}"} end)
+
+    {:ok, %{upserted: 5, skipped: 0}} =
+      BulkUpsert.bulk_upsert(Repo, Author, attrs_stream, chunk_size: 2)
+
+    # 5 authors in chunks of 2 -> 3 INSERT queries
+    assert count_insert_queries("authors") == 3
+
+    assert Repo.all(from a in Author, order_by: a.id, select: a.name) ==
+             Enum.map(1..5, &"author-#{&1}")
+  end
+
+  test "logs one warning summarizing skipped rows across all chunks of a stream" do
+    # With chunk_size: 1, the two invalid rows land in different chunks
+    attrs_stream = Stream.map([%{id: 1}, %{id: 2, name: "valid"}, %{id: 3}], & &1)
+
+    {result, log} =
+      ExUnit.CaptureLog.with_log([level: :warning], fn ->
+        BulkUpsert.bulk_upsert(Repo, Author, attrs_stream, chunk_size: 1)
+      end)
+
+    assert {:ok, %{upserted: 1, skipped: 2}} = result
+
+    # One summary covers both skipped rows, emitted once for the whole call rather than per chunk
+    assert log =~ "Skipped 2 of 3 items"
+    assert length(String.split(log, "Skipped")) == 2
+  end
+
+  test "raises when max_concurrency is not a positive integer" do
+    assert_raise ArgumentError, ~r/must be a positive integer/, fn ->
+      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}], max_concurrency: 0)
+    end
+  end
+
   test "raises on unknown options" do
     assert_raise ArgumentError, ~r/unknown option\(s\) \[:chunck_size\]/, fn ->
       BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}], chunck_size: 100)

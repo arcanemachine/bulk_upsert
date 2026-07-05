@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- `attrs_list` now accepts any `Enumerable`, including a lazy `Stream`: items are validated and
+  upserted chunk-by-chunk, so memory stays bounded for arbitrarily large inputs. Plain lists
+  behave as before, and skipped rows are still summarized in a single `:warning` log per call
+- Option `:max_concurrency` to upsert chunks concurrently, each in its own transaction. Setting
+  it trades the single-transaction guarantee for insert throughput — see the option's
+  documentation for the consequences before using it
+
 ## v0.4.0 - 2026-07-04
 
 ### Changed

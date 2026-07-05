@@ -14,6 +14,7 @@ defmodule BulkUpsert do
     :insert_all_function_atom,
     :insert_all_function_module,
     :insert_all_opts,
+    :max_concurrency,
     :placeholders,
     :recover_changeset_errors,
     :replace_all_except,
@@ -36,6 +37,7 @@ defmodule BulkUpsert do
           insert_all_function_module: module(),
           insert_all_function_atom: atom(),
           insert_all_opts: %{optional(module() | Ecto.Schema.source()) => Keyword.t()},
+          max_concurrency: pos_integer(),
           placeholders: %{
             optional(module() | Ecto.Schema.source()) => %{optional(atom()) => term()}
           },
@@ -45,9 +47,12 @@ defmodule BulkUpsert do
         ]
 
   @doc """
-  Validate a list of attrs maps (`attrs_list`) by passing them through an Ecto changeset,
-  then upsert the valid items to the database that corresponds to a given Ecto `repo_module` (e.g.
+  Validate attrs maps (`attrs_list`) by passing them through an Ecto changeset, then upsert the
+  valid items to the database that corresponds to a given Ecto `repo_module` (e.g.
   `YourProject.Repo`).
+
+  `attrs_list` may be any `Enumerable` — a plain list, or a lazy `Stream` for large inputs (see
+  the Streaming section below).
 
   Using a changeset serves two purposes:
     1. The changeset can be used to validate and transform the data.
@@ -77,7 +82,16 @@ defmodule BulkUpsert do
   the top-level attrs: `:upserted` is the number of items sent to the database, and `:skipped` is
   the number of items dropped because their changesets were invalid. (Skipped items are
   summarized in one `:warning` log per call, with per-item detail at the `:debug` level.) A
-  database error rolls back the entire upsert and raises.
+  database error raises; by default the entire upsert runs in a single transaction, so every
+  change is rolled back (with `:max_concurrency`, only the failing chunk is — see below).
+
+  ## Streaming
+
+  `attrs_list` is consumed lazily, in chunks of `:chunk_size` items: a `Stream` is never fully
+  materialized, so memory stays bounded for arbitrarily large inputs. Plain lists behave
+  identically (same counts, same single skipped-items summary log). Note that without
+  `:max_concurrency`, the single transaction — and any locks it takes — stays open for the
+  stream's full duration.
 
   ## Options
 
@@ -119,6 +133,20 @@ defmodule BulkUpsert do
     - `:conflict_target` defaults to the schema's primary key, so a schema without a primary key
     must supply its own `:conflict_target` here (otherwise the upsert fails at the database).
 
+  - `:max_concurrency` - Upsert up to this many chunks of `:chunk_size` parents concurrently
+  (via `Task.async_stream/3`), each chunk in its own transaction. By default, all chunks are
+  upserted sequentially inside a single transaction. Setting this option trades the
+  single-transaction guarantee for insert throughput: (Default: `nil`)
+    - A failing chunk still raises, but chunks that already committed stay committed, so a
+    failure partway through leaves the database with partial results.
+    - `:timeout` applies to each chunk's transaction instead of the whole call.
+    - Concurrent chunks that share `many_to_many` child records may upsert the same related (or
+    join table) rows in different orders, which can deadlock in Postgres. Ensure concurrent
+    input does not share child records across chunks, or be prepared to retry on deadlock.
+    - In the test environment, the Ecto SQL sandbox requires shared mode (or explicit
+    allowances) so the spawned tasks may use the test's database connection — e.g.
+    `use MyApp.DataCase, async: false` with a Phoenix-style `setup_sandbox/1`.
+
   - `:placeholders` - Set fields from shared values that are sent to the database once instead of
   once per row, using the `:placeholders` feature of Ecto's `insert_all/3`. This option is a map
   whose key is the schema or source being upserted, and the value is a map of `field => value`.
@@ -150,7 +178,8 @@ defmodule BulkUpsert do
     - Example: `[:field, :other_field]`
 
   - `:timeout` - The maximum timeout for the transaction that wraps the entire bulk upsert (all
-  chunks), also applied to each `insert_all/3` query. (Default: `#{@default_timeout}`)
+  chunks), also applied to each `insert_all/3` query. With `:max_concurrency`, the timeout
+  applies to each chunk's transaction instead. (Default: `#{@default_timeout}`)
     - Example: `60_000`
 
   ## Examples
@@ -209,7 +238,7 @@ defmodule BulkUpsert do
   include its foreign key field in the attrs (e.g. `category_id`). This applies at every level of
   nesting.
   """
-  @spec bulk_upsert(module(), module(), [map()], options()) ::
+  @spec bulk_upsert(module(), module(), Enumerable.t(map()), options()) ::
           {:ok, %{upserted: non_neg_integer(), skipped: non_neg_integer()}}
   def bulk_upsert(repo_module, schema_module, attrs_list, opts \\ []) do
     validate_opts!(opts)
@@ -218,6 +247,7 @@ defmodule BulkUpsert do
     config = %{
       changeset_function_atom: Keyword.get(opts, :changeset_function_atom, :changeset),
       chunk_size: Keyword.get(opts, :chunk_size, 1000),
+      max_concurrency: Keyword.get(opts, :max_concurrency),
       recover_changeset_errors: Keyword.get(opts, :recover_changeset_errors, %{}),
       insert_all_function_module: Keyword.get(opts, :insert_all_function_module, repo_module),
       insert_all_function_atom: Keyword.get(opts, :insert_all_function_atom, :insert_all),
@@ -235,36 +265,119 @@ defmodule BulkUpsert do
         # placeholder field is cast and validated like any other field (and may be included in
         # `validate_required/2`). The value is swapped for a `{:placeholder, field}` tuple after
         # validation, in `insert_all_entries/4`
-        Enum.map(attrs_list, &inject_placeholder_values(&1, schema_module, config.placeholders))
+        Stream.map(attrs_list, &inject_placeholder_values(&1, schema_module, config.placeholders))
       end
 
-    valid_changesets =
+    # Build changesets lazily and chunk large payloads to stay within Postgres bulk limits.
+    # Laziness lets any `Enumerable` (including a `Stream`) be validated and upserted
+    # chunk-by-chunk without materializing the whole input
+    changeset_chunks =
       attrs_list
       # Convert to changesets so the data can be validated before upsertion
-      |> Enum.map(fn attrs -> apply(schema_module, config.changeset_function_atom, [attrs]) end)
-      |> then(&handle_invalid_changesets(schema_module, &1, config.recover_changeset_errors))
+      |> Stream.map(fn attrs -> apply(schema_module, config.changeset_function_atom, [attrs]) end)
+      |> Stream.chunk_every(config.chunk_size)
 
-    # Work around Postgres bulk limits by chunking large payloads
-    changeset_chunks = Enum.chunk_every(valid_changesets, config.chunk_size)
+    totals =
+      changeset_chunks
+      |> upsert_chunks(repo_module, schema_module, config)
+      |> aggregate_chunk_results()
 
-    # Wrap all bulk upserts in a single transaction so that any failure rolls back all changes
-    # made to every chunk of parents and all of their associations
-    repo_module.transaction(
-      fn ->
-        # Use `Enum.each/2` instead of `Task.async_stream/2`. (This slightly decreases
-        # performance, but prevents issues when using the Ecto sandbox (i.e. in the `:test`
-        # configuration environment) since other functions may also call `Task.async_stream/2`
-        # before calling this function. These nested async calls cause issues with the sandbox.
-        # If the additional performance is required, the caller may be able to pass in its PID to
-        # the `Repo.insert_all/3` opts to work around this issue, at the cost of additional
-        # complexity in the codebase)
-        Enum.each(changeset_chunks, &do_bulk_upsert(schema_module, &1, config))
+    if totals.skipped > 0, do: log_skipped_changesets_summary(schema_module, totals)
+
+    {:ok, %{upserted: totals.upserted, skipped: totals.skipped}}
+  end
+
+  # Upsert every chunk sequentially, wrapped in a single transaction so that any failure rolls
+  # back all changes made to every chunk of parents and all of their associations
+  defp upsert_chunks(
+         changeset_chunks,
+         repo_module,
+         schema_module,
+         %{max_concurrency: nil} = config
+       ) do
+    {:ok, chunk_results} =
+      repo_module.transaction(
+        fn -> Enum.map(changeset_chunks, &upsert_chunk(schema_module, &1, config)) end,
+        timeout: config.timeout
+      )
+
+    chunk_results
+  end
+
+  # Upsert chunks concurrently, each in its own transaction. A failing chunk raises in the
+  # caller, but chunks that already committed stay committed (see the `:max_concurrency` docs)
+  defp upsert_chunks(changeset_chunks, repo_module, schema_module, config) do
+    changeset_chunks
+    |> Task.async_stream(
+      fn changesets ->
+        # An exception is returned instead of raised, then reraised in the caller below, so a
+        # failing chunk propagates the original error (e.g. a `Postgrex.Error`) just like the
+        # sequential mode, rather than exiting the caller
+        try do
+          {:ok, chunk_result} =
+            repo_module.transaction(
+              fn -> upsert_chunk(schema_module, changesets, config) end,
+              timeout: config.timeout
+            )
+
+          {:ok, chunk_result}
+        rescue
+          exception -> {:raised, exception, __STACKTRACE__}
+        end
       end,
-      timeout: config.timeout
+      max_concurrency: config.max_concurrency,
+      timeout: :infinity
     )
+    |> Enum.map(fn
+      {:ok, {:ok, chunk_result}} -> chunk_result
+      {:ok, {:raised, exception, stacktrace}} -> reraise(exception, stacktrace)
+    end)
+  end
 
-    upserted_count = length(valid_changesets)
-    {:ok, %{upserted: upserted_count, skipped: length(attrs_list) - upserted_count}}
+  # Validate, recover, and upsert one chunk of parent changesets, returning the chunk's counts
+  # and the primary keys of its skipped items (capped, for the end-of-call summary log)
+  defp upsert_chunk(schema_module, changesets, config) do
+    {valid_changesets, invalid_changesets} =
+      changesets
+      |> recover_changesets_with_recoverable_errors(config.recover_changeset_errors)
+      |> Enum.split_with(& &1.valid?)
+
+    Enum.each(invalid_changesets, &log_on_bulk_upsert_changeset_error(schema_module, &1))
+
+    if valid_changesets != [], do: do_bulk_upsert(schema_module, valid_changesets, config)
+
+    %{
+      upserted: length(valid_changesets),
+      skipped: length(invalid_changesets),
+      skipped_item_ids:
+        invalid_changesets
+        |> Enum.take(@skipped_item_ids_log_limit)
+        |> Enum.map(&changeset_primary_key(schema_module, &1))
+    }
+  end
+
+  # Sum the per-chunk counts, keeping the skipped-item IDs capped so an arbitrarily long input
+  # cannot accumulate unbounded log metadata
+  defp aggregate_chunk_results(chunk_results) do
+    initial_totals = %{upserted: 0, skipped: 0, skipped_item_ids: []}
+
+    Enum.reduce(chunk_results, initial_totals, fn chunk_result, totals ->
+      remaining_id_slots = @skipped_item_ids_log_limit - length(totals.skipped_item_ids)
+
+      %{
+        upserted: totals.upserted + chunk_result.upserted,
+        skipped: totals.skipped + chunk_result.skipped,
+        skipped_item_ids:
+          totals.skipped_item_ids ++ Enum.take(chunk_result.skipped_item_ids, remaining_id_slots)
+      }
+    end)
+  end
+
+  defp changeset_primary_key(schema_module, changeset) do
+    schema_module.__schema__(:primary_key)
+    |> Map.new(fn primary_key_field ->
+      {primary_key_field, changeset.changes[primary_key_field]}
+    end)
   end
 
   # Raise on unknown option names, and on BulkUpsert-level options nested inside
@@ -278,6 +391,14 @@ defmodule BulkUpsert do
       unknown option(s) #{inspect(unknown_options)}.
 
       Valid options: #{inspect(@valid_options)}\
+      """
+    end
+
+    max_concurrency = Keyword.get(opts, :max_concurrency)
+
+    if not (is_nil(max_concurrency) or (is_integer(max_concurrency) and max_concurrency > 0)) do
+      raise ArgumentError, """
+      the `:max_concurrency` option must be a positive integer, got: #{inspect(max_concurrency)}\
       """
     end
 
@@ -539,18 +660,8 @@ defmodule BulkUpsert do
     |> Keyword.keys()
   end
 
-  defp handle_invalid_changesets(schema_module, changesets, recover_changeset_errors) do
-    changesets
-    |> recover_changesets_with_recoverable_errors(recover_changeset_errors)
-    |> then(&reject_invalid_changesets(schema_module, &1))
-  end
-
   defp log_on_bulk_upsert_changeset_error(schema_module, changeset) do
-    item_id_or_ids =
-      schema_module.__schema__(:primary_key)
-      |> Enum.reduce(%{}, fn primary_key_field, acc ->
-        acc |> Map.put(primary_key_field, changeset.changes[primary_key_field])
-      end)
+    item_id_or_ids = changeset_primary_key(schema_module, changeset)
 
     invalid_parent_attrs =
       changeset.errors
@@ -730,47 +841,25 @@ defmodule BulkUpsert do
     %{changeset | changes: Map.put(changeset.changes, field, recover_to_value)}
   end
 
-  defp reject_invalid_changesets(schema_module, changesets) do
-    {valid_changesets, invalid_changesets} = Enum.split_with(changesets, & &1.valid?)
-
-    if invalid_changesets != [] do
-      log_skipped_changesets_summary(schema_module, changesets, invalid_changesets)
-      Enum.each(invalid_changesets, &log_on_bulk_upsert_changeset_error(schema_module, &1))
-    end
-
-    valid_changesets
-  end
-
-  # One `:warning` per bulk upsert call summarizes every skipped item. The per-item details are
-  # logged at the `:debug` level, so a large batch of invalid rows cannot flood the log.
-  defp log_skipped_changesets_summary(schema_module, changesets, invalid_changesets) do
-    skipped_count = length(invalid_changesets)
-
-    item_ids =
-      invalid_changesets
-      |> Enum.take(@skipped_item_ids_log_limit)
-      |> Enum.map(fn changeset ->
-        schema_module.__schema__(:primary_key)
-        |> Map.new(fn primary_key_field ->
-          {primary_key_field, changeset.changes[primary_key_field]}
-        end)
-      end)
-
+  # One `:warning` per bulk upsert call summarizes every skipped item, accumulated across all
+  # chunks. The per-item details are logged at the `:debug` level, so a large batch of invalid
+  # rows cannot flood the log.
+  defp log_skipped_changesets_summary(schema_module, totals) do
     truncation_note =
-      if skipped_count > @skipped_item_ids_log_limit,
+      if totals.skipped > @skipped_item_ids_log_limit,
         do: " The first #{@skipped_item_ids_log_limit} skipped item IDs are listed.",
         else: ""
 
     Logger.warning(
       """
-      Skipped #{skipped_count} of #{length(changesets)} items because their changesets had \
-      unrecoverable errors. The skipped items were not upserted. Details for each skipped item \
-      are logged at the `:debug` level.#{truncation_note}\
+      Skipped #{totals.skipped} of #{totals.upserted + totals.skipped} items because their \
+      changesets had unrecoverable errors. The skipped items were not upserted. Details for \
+      each skipped item are logged at the `:debug` level.#{truncation_note}\
       """,
       reason: :bulk_upsert_items_skipped,
       schema_module: inspect(schema_module),
-      skipped_count: skipped_count,
-      item_ids: item_ids
+      skipped_count: totals.skipped,
+      item_ids: totals.skipped_item_ids
     )
   end
 end
