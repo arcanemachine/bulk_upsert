@@ -1,4 +1,4 @@
-defmodule BulkUpsertDemo.Blog.SocialLink do
+defmodule BulkinupDemo.Blog.SocialLink do
   @moduledoc "An author's social link (`embeds_many`, stored inline on the author row)."
 
   use Ecto.Schema

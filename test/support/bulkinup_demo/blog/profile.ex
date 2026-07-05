@@ -1,4 +1,4 @@
-defmodule BulkUpsertDemo.Blog.Profile do
+defmodule BulkinupDemo.Blog.Profile do
   @moduledoc "An author's profile (`has_one` from the author)."
 
   use Ecto.Schema

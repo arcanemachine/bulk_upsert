@@ -1,5 +1,5 @@
 # Start the demo application for tests
-{:ok, _} = BulkUpsertDemo.Application.start(:normal, [])
+{:ok, _} = BulkinupDemo.Application.start(:normal, [])
 
 ExUnit.start()
-Ecto.Adapters.SQL.Sandbox.mode(BulkUpsertDemo.Repo, :manual)
+Ecto.Adapters.SQL.Sandbox.mode(BulkinupDemo.Repo, :manual)

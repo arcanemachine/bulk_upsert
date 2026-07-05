@@ -1,4 +1,4 @@
-defmodule BulkUpsertDemo.Blog.Author do
+defmodule BulkinupDemo.Blog.Author do
   @moduledoc "A blog author. The parent schema for most demo scenarios."
 
   use Ecto.Schema
@@ -10,11 +10,11 @@ defmodule BulkUpsertDemo.Blog.Author do
     field :phone_number, :string
     field :inserted_at, :utc_datetime_usec
 
-    has_many :posts, BulkUpsertDemo.Blog.Post
-    has_one :profile, BulkUpsertDemo.Blog.Profile, foreign_key: :author_id
+    has_many :posts, BulkinupDemo.Blog.Post
+    has_one :profile, BulkinupDemo.Blog.Profile, foreign_key: :author_id
 
-    embeds_one :address, BulkUpsertDemo.Blog.Address
-    embeds_many :social_links, BulkUpsertDemo.Blog.SocialLink
+    embeds_one :address, BulkinupDemo.Blog.Address
+    embeds_many :social_links, BulkinupDemo.Blog.SocialLink
   end
 
   def changeset(author \\ %__MODULE__{}, attrs) do

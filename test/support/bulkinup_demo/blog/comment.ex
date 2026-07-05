@@ -1,4 +1,4 @@
-defmodule BulkUpsertDemo.Blog.Comment do
+defmodule BulkinupDemo.Blog.Comment do
   @moduledoc "A comment on a blog post (`has_many` from the post, two levels below the author)."
 
   use Ecto.Schema

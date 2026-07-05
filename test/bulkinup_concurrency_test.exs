@@ -1,15 +1,15 @@
-defmodule BulkUpsertConcurrencyTest do
+defmodule BulkinupConcurrencyTest do
   # `async: false` puts the SQL sandbox in shared mode, so the tasks spawned by
   # `:max_concurrency` may use the test's database connection
-  use BulkUpsertDemo.DataCase, async: false
+  use BulkinupDemo.DataCase, async: false
 
-  alias BulkUpsertDemo.Blog.Author
+  alias BulkinupDemo.Blog.Author
 
   test "upserts chunks concurrently, each in its own transaction" do
     attrs_list = Enum.map(1..5, fn id -> %{id: id, name: "author-#{id}"} end)
 
     {:ok, %{upserted: 5, skipped: 0}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list, chunk_size: 2, max_concurrency: 2)
+      Bulkinup.upsert(Repo, Author, attrs_list, chunk_size: 2, max_concurrency: 2)
 
     assert Repo.all(from a in Author, order_by: a.id, select: a.name) ==
              Enum.map(1..5, &"author-#{&1}")
@@ -19,7 +19,7 @@ defmodule BulkUpsertConcurrencyTest do
     attrs_stream = Stream.map(1..5, fn id -> %{id: id, name: "author-#{id}"} end)
 
     {:ok, %{upserted: 5, skipped: 0}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_stream, chunk_size: 2, max_concurrency: 2)
+      Bulkinup.upsert(Repo, Author, attrs_stream, chunk_size: 2, max_concurrency: 2)
 
     assert Repo.aggregate(Author, :count) == 5
   end
@@ -29,7 +29,7 @@ defmodule BulkUpsertConcurrencyTest do
 
     {result, log} =
       ExUnit.CaptureLog.with_log([level: :warning], fn ->
-        BulkUpsert.bulk_upsert(Repo, Author, attrs_list, chunk_size: 1, max_concurrency: 2)
+        Bulkinup.upsert(Repo, Author, attrs_list, chunk_size: 1, max_concurrency: 2)
       end)
 
     assert {:ok, %{upserted: 2, skipped: 2}} = result
@@ -47,7 +47,7 @@ defmodule BulkUpsertConcurrencyTest do
     ]
 
     assert_raise Postgrex.Error, ~r/foreign_key/, fn ->
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list, chunk_size: 1, max_concurrency: 1)
+      Bulkinup.upsert(Repo, Author, attrs_list, chunk_size: 1, max_concurrency: 1)
     end
 
     # Unlike the default single-transaction mode, the committed chunk is not rolled back

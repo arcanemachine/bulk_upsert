@@ -1,16 +1,16 @@
-defmodule BulkUpsertDemo.Blog.Tag do
-  @moduledoc "A post tag (`many_to_many` with posts via the `posts_tags` join table)."
+defmodule BulkinupDemo.Blog.Category do
+  @moduledoc "A post category (`belongs_to` from the post)."
 
   use Ecto.Schema
   import Ecto.Changeset
 
   @primary_key {:id, :integer, autogenerate: false}
-  schema "tags" do
+  schema "categories" do
     field :name, :string
   end
 
-  def changeset(tag \\ %__MODULE__{}, attrs) do
-    tag
+  def changeset(category \\ %__MODULE__{}, attrs) do
+    category
     |> cast(attrs, [:id, :name])
     |> validate_required([:id, :name])
   end

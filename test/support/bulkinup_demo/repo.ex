@@ -1,4 +1,4 @@
-defmodule BulkUpsertDemo.Repo do
+defmodule BulkinupDemo.Repo do
   use Ecto.Repo,
     otp_app: :bulk_upsert,
     adapter: Ecto.Adapters.Postgres

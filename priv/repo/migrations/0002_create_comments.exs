@@ -1,4 +1,4 @@
-defmodule BulkUpsertDemo.Repo.Migrations.CreateComments do
+defmodule BulkinupDemo.Repo.Migrations.CreateComments do
   use Ecto.Migration
 
   def change do

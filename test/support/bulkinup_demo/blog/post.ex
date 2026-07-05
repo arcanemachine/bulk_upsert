@@ -1,4 +1,4 @@
-defmodule BulkUpsertDemo.Blog.Post do
+defmodule BulkinupDemo.Blog.Post do
   @moduledoc "A blog post, written by an author, optionally categorized and tagged."
 
   use Ecto.Schema
@@ -10,11 +10,11 @@ defmodule BulkUpsertDemo.Blog.Post do
     field :title, :string
     field :inserted_at, :utc_datetime_usec
 
-    belongs_to :category, BulkUpsertDemo.Blog.Category, type: :integer
+    belongs_to :category, BulkinupDemo.Blog.Category, type: :integer
 
-    has_many :comments, BulkUpsertDemo.Blog.Comment
+    has_many :comments, BulkinupDemo.Blog.Comment
 
-    many_to_many :tags, BulkUpsertDemo.Blog.Tag,
+    many_to_many :tags, BulkinupDemo.Blog.Tag,
       join_through: "posts_tags",
       join_keys: [post_id: :id, tag_id: :id]
   end

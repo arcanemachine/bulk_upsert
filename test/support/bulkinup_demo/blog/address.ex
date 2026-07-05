@@ -1,4 +1,4 @@
-defmodule BulkUpsertDemo.Blog.Address do
+defmodule BulkinupDemo.Blog.Address do
   @moduledoc "An author's address (`embeds_one`, stored inline on the author row)."
 
   use Ecto.Schema

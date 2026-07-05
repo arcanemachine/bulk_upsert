@@ -1,4 +1,4 @@
-defmodule BulkUpsertDemo.Repo.Migrations.CreateBlogTables do
+defmodule BulkinupDemo.Repo.Migrations.CreateBlogTables do
   use Ecto.Migration
 
   def change do

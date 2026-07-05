@@ -1,4 +1,4 @@
-defmodule BulkUpsert do
+defmodule Bulkinup do
   @moduledoc "Bulk upsert Ecto structs and their nested associations in one call."
 
   require Logger
@@ -26,7 +26,7 @@ defmodule BulkUpsert do
   @options_misplaced_inside_insert_all_opts @valid_options -- [:timeout, :placeholders]
 
   @typedoc """
-  Options accepted by `bulk_upsert/4`. See that function's documentation for details.
+  Options accepted by `upsert/4`. See that function's documentation for details.
 
   Map keys typed `module() | Ecto.Schema.source()` accept a schema module or, for
   `many_to_many` join tables, the source as a string (e.g. `"persons_topics"`).
@@ -66,7 +66,7 @@ defmodule BulkUpsert do
 
   ## Basic example
 
-      iex> BulkUpsert.bulk_upsert(
+      iex> Bulkinup.upsert(
       ...>   YourProject.Repo,
       ...>   YourProject.Persons.Person,
       ...>   _attrs_list = [
@@ -95,7 +95,7 @@ defmodule BulkUpsert do
 
   ## Options
 
-  Unknown option names raise an `ArgumentError`, as does passing a BulkUpsert option (other than
+  Unknown option names raise an `ArgumentError`, as does passing a Bulkinup option (other than
   `:timeout` or `:placeholders`, which `insert_all/3` also accepts) inside an `:insert_all_opts`
   value.
 
@@ -189,7 +189,7 @@ defmodule BulkUpsert do
 
       iex> attrs_list = [%{id: 1, name: "Alice", ...}]
 
-      iex> BulkUpsert.bulk_upsert(
+      iex> Bulkinup.upsert(
       ...>   YourProject.Repo,
       ...>   YourProject.Persons.Person,
       ...>   attrs_list,
@@ -205,7 +205,7 @@ defmodule BulkUpsert do
       ...>   YourProject.Persons.Person => [on_conflict: {:replace, [:name]}]
       ...> }
 
-      iex> BulkUpsert.bulk_upsert(
+      iex> Bulkinup.upsert(
       ...>   YourProject.Repo,
       ...>   YourProject.Persons.Person,
       ...>   _attrs_list = [%{id: 1, name: "Alicia"}],
@@ -238,9 +238,9 @@ defmodule BulkUpsert do
   include its foreign key field in the attrs (e.g. `category_id`). This applies at every level of
   nesting.
   """
-  @spec bulk_upsert(module(), module(), Enumerable.t(map()), options()) ::
+  @spec upsert(module(), module(), Enumerable.t(map()), options()) ::
           {:ok, %{upserted: non_neg_integer(), skipped: non_neg_integer()}}
-  def bulk_upsert(repo_module, schema_module, attrs_list, opts \\ []) do
+  def upsert(repo_module, schema_module, attrs_list, opts \\ []) do
     validate_opts!(opts)
 
     # Parse all options once; `config` is threaded through every helper below
@@ -342,9 +342,9 @@ defmodule BulkUpsert do
       |> recover_changesets_with_recoverable_errors(config.recover_changeset_errors)
       |> Enum.split_with(& &1.valid?)
 
-    Enum.each(invalid_changesets, &log_on_bulk_upsert_changeset_error(schema_module, &1))
+    Enum.each(invalid_changesets, &log_on_upsert_changeset_error(schema_module, &1))
 
-    if valid_changesets != [], do: do_bulk_upsert(schema_module, valid_changesets, config)
+    if valid_changesets != [], do: do_upsert(schema_module, valid_changesets, config)
 
     %{
       upserted: length(valid_changesets),
@@ -380,7 +380,7 @@ defmodule BulkUpsert do
     end)
   end
 
-  # Raise on unknown option names, and on BulkUpsert-level options nested inside
+  # Raise on unknown option names, and on Bulkinup-level options nested inside
   # `:insert_all_opts` values. The keys of each `:insert_all_opts` value are otherwise not
   # checked, since the set of valid `insert_all/3` options belongs to Ecto.
   defp validate_opts!(opts) do
@@ -432,7 +432,7 @@ defmodule BulkUpsert do
       if misplaced_options != [] do
         raise ArgumentError, """
         the option(s) #{inspect(misplaced_options)} given for #{inspect(schema_or_source)} are \
-        BulkUpsert options, and have no effect inside `:insert_all_opts`. Pass them at the top \
+        Bulkinup options, and have no effect inside `:insert_all_opts`. Pass them at the top \
         level of `opts` instead.\
         """
       end
@@ -501,7 +501,7 @@ defmodule BulkUpsert do
   end
 
   defp attrs_from_changeset(changeset) do
-    struct = Ecto.Changeset.apply_action!(changeset, :build_for_bulk_upsert)
+    struct = Ecto.Changeset.apply_action!(changeset, :build_for_upsert)
 
     struct
     |> Map.from_struct()
@@ -539,7 +539,7 @@ defmodule BulkUpsert do
     end)
   end
 
-  defp do_bulk_upsert(schema_module, changesets, config) do
+  defp do_upsert(schema_module, changesets, config) do
     %{insert_all_opts: insert_all_opts, replace_all_except: replace_all_except, timeout: timeout} =
       config
 
@@ -579,7 +579,7 @@ defmodule BulkUpsert do
         |> Enum.flat_map(&List.wrap/1)
 
       # Recurse so each child's own nested associations are upserted as well
-      do_bulk_upsert(association_schema_module, association_changesets, config)
+      do_upsert(association_schema_module, association_changesets, config)
     end
 
     # Perform bulk upsert for all `many_to_many` associations
@@ -611,7 +611,7 @@ defmodule BulkUpsert do
         end)
 
       # Recurse so each related record's own nested associations are upserted as well
-      do_bulk_upsert(related_schema_module, related_changesets, config)
+      do_upsert(related_schema_module, related_changesets, config)
 
       # Upsert the join table rows that link each parent to its related records. The same link
       # may be listed more than once, so duplicate rows are removed for the same reason.
@@ -668,7 +668,7 @@ defmodule BulkUpsert do
     |> Keyword.keys()
   end
 
-  defp log_on_bulk_upsert_changeset_error(schema_module, changeset) do
+  defp log_on_upsert_changeset_error(schema_module, changeset) do
     item_id_or_ids = changeset_primary_key(schema_module, changeset)
 
     invalid_parent_attrs =
@@ -718,7 +718,7 @@ defmodule BulkUpsert do
       This changeset has one or more unrecoverable errors. The item associated with this \
       changeset will not be upserted.\
       """,
-      reason: :bulk_upsert_changeset_error,
+      reason: :upsert_changeset_error,
       schema_module: inspect(schema_module),
       item_id_or_ids: item_id_or_ids,
       # NOTE: If one item in an array contains an invalid value, the whole array will be logged
@@ -864,7 +864,7 @@ defmodule BulkUpsert do
       changesets had unrecoverable errors. The skipped items were not upserted. Details for \
       each skipped item are logged at the `:debug` level.#{truncation_note}\
       """,
-      reason: :bulk_upsert_items_skipped,
+      reason: :upsert_items_skipped,
       schema_module: inspect(schema_module),
       skipped_count: totals.skipped,
       item_ids: totals.skipped_item_ids

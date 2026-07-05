@@ -1,32 +1,32 @@
-defmodule BulkUpsertDemo.DataCase do
+defmodule BulkinupDemo.DataCase do
   @moduledoc """
   This module defines the setup for tests requiring access to the demo application's data layer.
 
   The SQL sandbox reverts all database changes at the end of every test, so tests may run with
-  `use BulkUpsertDemo.DataCase, async: true`.
+  `use BulkinupDemo.DataCase, async: true`.
   """
 
   use ExUnit.CaseTemplate
 
   using do
     quote do
-      alias BulkUpsertDemo.Repo
+      alias BulkinupDemo.Repo
 
       import Ecto
       import Ecto.Changeset
       import Ecto.Query
-      import BulkUpsertDemo.DataCase
+      import BulkinupDemo.DataCase
     end
   end
 
   setup tags do
-    BulkUpsertDemo.DataCase.setup_sandbox(tags)
+    BulkinupDemo.DataCase.setup_sandbox(tags)
     :ok
   end
 
   @doc "Sets up the sandbox based on the test tags."
   def setup_sandbox(tags) do
-    pid = Ecto.Adapters.SQL.Sandbox.start_owner!(BulkUpsertDemo.Repo, shared: not tags[:async])
+    pid = Ecto.Adapters.SQL.Sandbox.start_owner!(BulkinupDemo.Repo, shared: not tags[:async])
     ExUnit.Callbacks.on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
   end
 
@@ -44,7 +44,7 @@ defmodule BulkUpsertDemo.DataCase do
 
     :telemetry.attach(
       handler_id,
-      [:bulk_upsert_demo, :repo, :query],
+      [:bulkinup_demo, :repo, :query],
       fn _event, _measurements, metadata, _config ->
         if self() == test_pid and metadata.source == source and
              String.starts_with?(metadata.query, "INSERT") do

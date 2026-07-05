@@ -1,18 +1,18 @@
-defmodule BulkUpsertTest do
-  use BulkUpsertDemo.DataCase, async: true
+defmodule BulkinupTest do
+  use BulkinupDemo.DataCase, async: true
 
-  alias BulkUpsertDemo.Blog.{Address, Author, Category, Comment, Post, Profile, SocialLink, Tag}
-  alias BulkUpsertDemo.ProxyRepo
+  alias BulkinupDemo.Blog.{Address, Author, Category, Comment, Post, Profile, SocialLink, Tag}
+  alias BulkinupDemo.ProxyRepo
 
   test "upserts rows, updating them on conflict" do
     {:ok, %{upserted: 2, skipped: 0}} =
-      BulkUpsert.bulk_upsert(Repo, Author, [
+      Bulkinup.upsert(Repo, Author, [
         %{id: 1, name: "Alice"},
         %{id: 2, name: "Bob"}
       ])
 
     {:ok, _} =
-      BulkUpsert.bulk_upsert(Repo, Author, [
+      Bulkinup.upsert(Repo, Author, [
         %{id: 1, name: "Alicia"},
         %{id: 2, name: "Bobby"}
       ])
@@ -25,7 +25,7 @@ defmodule BulkUpsertTest do
 
     attrs_list = Enum.map(1..5, fn id -> %{id: id, name: "author-#{id}"} end)
 
-    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list, chunk_size: 2)
+    {:ok, _} = Bulkinup.upsert(Repo, Author, attrs_list, chunk_size: 2)
 
     # 5 authors in chunks of 2 -> 3 INSERT queries
     assert count_insert_queries("authors") == 3
@@ -56,7 +56,7 @@ defmodule BulkUpsertTest do
       }
     ]
 
-    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list, chunk_size: 2)
+    {:ok, _} = Bulkinup.upsert(Repo, Author, attrs_list, chunk_size: 2)
 
     # 6 posts in chunks of 2 -> 3 INSERT queries
     assert count_insert_queries("posts") == 3
@@ -69,7 +69,7 @@ defmodule BulkUpsertTest do
       %{id: 2, name: "Bob", profile: %{id: 102, author_id: 2, bio: "b"}}
     ]
 
-    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+    {:ok, _} = Bulkinup.upsert(Repo, Author, attrs_list)
 
     assert Repo.all(from p in Profile, order_by: p.id, select: {p.author_id, p.bio}) ==
              [{1, "a"}, {2, "b"}]
@@ -81,7 +81,7 @@ defmodule BulkUpsertTest do
       %{id: 2, name: "Bob"}
     ]
 
-    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+    {:ok, _} = Bulkinup.upsert(Repo, Author, attrs_list)
 
     # Only the author that supplied a profile results in a profile row
     assert Repo.all(from p in Profile, select: p.id) == [101]
@@ -101,7 +101,7 @@ defmodule BulkUpsertTest do
       }
     ]
 
-    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+    {:ok, _} = Bulkinup.upsert(Repo, Author, attrs_list)
 
     author = Repo.get!(Author, 1)
     assert author.address == %Address{street: "1 Main St", city: "Springfield"}
@@ -126,7 +126,7 @@ defmodule BulkUpsertTest do
       %{id: 2, author_id: 1, title: "P2", tags: [%{id: 10, name: "elixir"}]}
     ]
 
-    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Post, attrs_list)
+    {:ok, _} = Bulkinup.upsert(Repo, Post, attrs_list)
 
     assert Repo.all(from t in Tag, order_by: t.id, select: {t.id, t.name}) ==
              [{10, "elixir"}, {11, "ecto"}]
@@ -139,7 +139,7 @@ defmodule BulkUpsertTest do
     assert join_rows == [{1, 10}, {1, 11}, {2, 10}]
 
     # Upserting the same attrs again is idempotent (relies on the join table's unique index)
-    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Post, attrs_list)
+    {:ok, _} = Bulkinup.upsert(Repo, Post, attrs_list)
     assert Repo.aggregate("posts_tags", :count) == 3
   end
 
@@ -158,7 +158,7 @@ defmodule BulkUpsertTest do
       }
     ]
 
-    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Post, attrs_list)
+    {:ok, _} = Bulkinup.upsert(Repo, Post, attrs_list)
 
     # The foreign key is set on the post, but the nested category data is never upserted
     assert Repo.get!(Post, 1).category_id == 5
@@ -185,7 +185,7 @@ defmodule BulkUpsertTest do
       }
     ]
 
-    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+    {:ok, _} = Bulkinup.upsert(Repo, Author, attrs_list)
 
     assert Repo.all(from c in Comment, order_by: c.id, select: {c.post_id, c.body}) ==
              [{101, "first"}, {101, "second"}]
@@ -204,7 +204,7 @@ defmodule BulkUpsertTest do
       }
     ]
 
-    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+    {:ok, _} = Bulkinup.upsert(Repo, Author, attrs_list)
 
     assert Repo.all(from t in Tag, select: {t.id, t.name}) == [{10, "elixir"}]
 
@@ -224,7 +224,7 @@ defmodule BulkUpsertTest do
     ]
 
     {:ok, _} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+      Bulkinup.upsert(Repo, Author, attrs_list,
         placeholders: %{
           Author => %{inserted_at: timestamp},
           Post => %{inserted_at: timestamp}
@@ -240,9 +240,7 @@ defmodule BulkUpsertTest do
     attrs_list = [%{id: 1}, %{id: 2}]
 
     {:ok, %{upserted: 2, skipped: 0}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
-        placeholders: %{Author => %{name: "Anonymous"}}
-      )
+      Bulkinup.upsert(Repo, Author, attrs_list, placeholders: %{Author => %{name: "Anonymous"}})
 
     assert Repo.all(from a in Author, select: a.name) == ["Anonymous", "Anonymous"]
   end
@@ -254,9 +252,7 @@ defmodule BulkUpsertTest do
     ]
 
     {:ok, %{upserted: 1, skipped: 0}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
-        placeholders: %{Post => %{title: "UNTITLED"}}
-      )
+      Bulkinup.upsert(Repo, Author, attrs_list, placeholders: %{Post => %{title: "UNTITLED"}})
 
     assert Repo.all(from p in Post, select: p.title) == ["UNTITLED", "UNTITLED"]
   end
@@ -268,7 +264,7 @@ defmodule BulkUpsertTest do
     attrs_list = [%{id: 1, author_id: 1, title: "P1", tags: [%{id: 10}]}]
 
     {:ok, %{upserted: 1, skipped: 0}} =
-      BulkUpsert.bulk_upsert(Repo, Post, attrs_list, placeholders: %{Tag => %{name: "misc"}})
+      Bulkinup.upsert(Repo, Post, attrs_list, placeholders: %{Tag => %{name: "misc"}})
 
     assert Repo.get!(Tag, 10).name == "misc"
     assert Repo.aggregate("posts_tags", :count) == 1
@@ -280,7 +276,7 @@ defmodule BulkUpsertTest do
     ]
 
     {:ok, %{upserted: 1, skipped: 0}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+      Bulkinup.upsert(Repo, Author, attrs_list,
         placeholders: %{Author => %{name: "Anonymous"}, Post => %{title: "UNTITLED"}}
       )
 
@@ -292,9 +288,7 @@ defmodule BulkUpsertTest do
     attrs_list = [%{id: 1, name: "Bob"}]
 
     {:ok, _} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
-        placeholders: %{Author => %{name: "Anonymous"}}
-      )
+      Bulkinup.upsert(Repo, Author, attrs_list, placeholders: %{Author => %{name: "Anonymous"}})
 
     assert Repo.get!(Author, 1).name == "Anonymous"
   end
@@ -306,16 +300,14 @@ defmodule BulkUpsertTest do
     attrs_list = [%{id: 1, name: "Alice", posts: "garbage"}]
 
     {:ok, %{upserted: 0, skipped: 1}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
-        placeholders: %{Post => %{title: "UNTITLED"}}
-      )
+      Bulkinup.upsert(Repo, Author, attrs_list, placeholders: %{Post => %{title: "UNTITLED"}})
 
     assert Repo.aggregate(Author, :count) == 0
   end
 
   test "uses changeset_function_atom when provided" do
     {:ok, _} =
-      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 10, name: "ignored"}],
+      Bulkinup.upsert(Repo, Author, [%{id: 10, name: "ignored"}],
         changeset_function_atom: :upsert_changeset
       )
 
@@ -330,7 +322,7 @@ defmodule BulkUpsertTest do
       %{id: 2}
     ]
 
-    assert {:ok, %{upserted: 1, skipped: 1}} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+    assert {:ok, %{upserted: 1, skipped: 1}} = Bulkinup.upsert(Repo, Author, attrs_list)
 
     assert Repo.all(from a in Author, select: {a.id, a.name}) == [{1, "valid"}]
   end
@@ -341,7 +333,7 @@ defmodule BulkUpsertTest do
     attrs_stream = Stream.map(1..5, fn id -> %{id: id, name: "author-#{id}"} end)
 
     {:ok, %{upserted: 5, skipped: 0}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_stream, chunk_size: 2)
+      Bulkinup.upsert(Repo, Author, attrs_stream, chunk_size: 2)
 
     # 5 authors in chunks of 2 -> 3 INSERT queries
     assert count_insert_queries("authors") == 3
@@ -356,7 +348,7 @@ defmodule BulkUpsertTest do
 
     {result, log} =
       ExUnit.CaptureLog.with_log([level: :warning], fn ->
-        BulkUpsert.bulk_upsert(Repo, Author, attrs_stream, chunk_size: 1)
+        Bulkinup.upsert(Repo, Author, attrs_stream, chunk_size: 1)
       end)
 
     assert {:ok, %{upserted: 1, skipped: 2}} = result
@@ -368,25 +360,25 @@ defmodule BulkUpsertTest do
 
   test "raises when chunk_size is not a positive integer" do
     assert_raise ArgumentError, ~r/`:chunk_size` option must be a positive integer/, fn ->
-      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}], chunk_size: 0)
+      Bulkinup.upsert(Repo, Author, [%{id: 1, name: "Alice"}], chunk_size: 0)
     end
   end
 
   test "raises when max_concurrency is not a positive integer" do
     assert_raise ArgumentError, ~r/must be a positive integer/, fn ->
-      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}], max_concurrency: 0)
+      Bulkinup.upsert(Repo, Author, [%{id: 1, name: "Alice"}], max_concurrency: 0)
     end
   end
 
   test "raises on unknown options" do
     assert_raise ArgumentError, ~r/unknown option\(s\) \[:chunck_size\]/, fn ->
-      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}], chunck_size: 100)
+      Bulkinup.upsert(Repo, Author, [%{id: 1, name: "Alice"}], chunck_size: 100)
     end
   end
 
-  test "raises on a BulkUpsert option nested inside insert_all_opts" do
+  test "raises on a Bulkinup option nested inside insert_all_opts" do
     assert_raise ArgumentError, ~r/no effect inside `:insert_all_opts`/, fn ->
-      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}],
+      Bulkinup.upsert(Repo, Author, [%{id: 1, name: "Alice"}],
         insert_all_opts: %{Author => [replace_all_except: [:name]]}
       )
     end
@@ -394,7 +386,7 @@ defmodule BulkUpsertTest do
 
   test "raises when insert_all_opts is not a map" do
     assert_raise ArgumentError, ~r/must be a map/, fn ->
-      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}],
+      Bulkinup.upsert(Repo, Author, [%{id: 1, name: "Alice"}],
         insert_all_opts: [on_conflict: :nothing]
       )
     end
@@ -402,7 +394,7 @@ defmodule BulkUpsertTest do
 
   test "allows :timeout and :placeholders inside insert_all_opts" do
     {:ok, _} =
-      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}],
+      Bulkinup.upsert(Repo, Author, [%{id: 1, name: "Alice"}],
         insert_all_opts: %{Author => [timeout: 30_000, placeholders: %{}]}
       )
 
@@ -414,7 +406,7 @@ defmodule BulkUpsertTest do
 
     {result, log} =
       ExUnit.CaptureLog.with_log([level: :warning], fn ->
-        BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+        Bulkinup.upsert(Repo, Author, attrs_list)
       end)
 
     assert {:ok, %{upserted: 1, skipped: 2}} = result
@@ -430,7 +422,7 @@ defmodule BulkUpsertTest do
     attrs_list = [%{id: 1, name: "Alice", phone_number: "INVALID"}]
 
     {:ok, _} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+      Bulkinup.upsert(Repo, Author, attrs_list,
         recover_changeset_errors: %{Author => %{phone_number: "555-1234"}}
       )
 
@@ -445,7 +437,7 @@ defmodule BulkUpsertTest do
     ]
 
     {:ok, %{upserted: 1, skipped: 0}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+      Bulkinup.upsert(Repo, Author, attrs_list,
         recover_changeset_errors: %{Post => %{title: "UNTITLED"}}
       )
 
@@ -468,7 +460,7 @@ defmodule BulkUpsertTest do
     ]
 
     {:ok, %{upserted: 1, skipped: 0}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+      Bulkinup.upsert(Repo, Author, attrs_list,
         recover_changeset_errors: %{
           Author => %{phone_number: "555-1234"},
           Comment => %{body: "[deleted]"}
@@ -485,7 +477,7 @@ defmodule BulkUpsertTest do
     attrs_list = [%{id: 1, name: "Alice", profile: %{id: 101, author_id: 1}}]
 
     {:ok, %{upserted: 1, skipped: 0}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+      Bulkinup.upsert(Repo, Author, attrs_list,
         recover_changeset_errors: %{Profile => %{bio: "(none)"}}
       )
 
@@ -500,7 +492,7 @@ defmodule BulkUpsertTest do
     attrs_list = [%{id: 1, author_id: 1, title: "P1", tags: [%{id: 10}]}]
 
     {:ok, %{upserted: 1, skipped: 0}} =
-      BulkUpsert.bulk_upsert(Repo, Post, attrs_list,
+      Bulkinup.upsert(Repo, Post, attrs_list,
         recover_changeset_errors: %{Tag => %{name: "unnamed"}}
       )
 
@@ -522,7 +514,7 @@ defmodule BulkUpsertTest do
     ]
 
     {:ok, %{upserted: 1, skipped: 0}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+      Bulkinup.upsert(Repo, Author, attrs_list,
         recover_changeset_errors: %{Post => %{title: "UNTITLED"}}
       )
 
@@ -540,7 +532,7 @@ defmodule BulkUpsertTest do
     ]
 
     {:ok, %{upserted: 1, skipped: 1}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+      Bulkinup.upsert(Repo, Author, attrs_list,
         recover_changeset_errors: %{Post => %{title: "UNTITLED"}}
       )
 
@@ -557,7 +549,7 @@ defmodule BulkUpsertTest do
     ]
 
     {:ok, %{upserted: 0, skipped: 1}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+      Bulkinup.upsert(Repo, Author, attrs_list,
         recover_changeset_errors: %{
           Author => %{phone_number: "555-1234"},
           Post => %{title: "UNTITLED"}
@@ -574,7 +566,7 @@ defmodule BulkUpsertTest do
     attrs_list = [%{id: 1, name: "Alice", address: %{street: "1 Main St"}}]
 
     {:ok, %{upserted: 1, skipped: 0}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+      Bulkinup.upsert(Repo, Author, attrs_list,
         recover_changeset_errors: %{Address => %{city: "Springfield"}}
       )
 
@@ -596,7 +588,7 @@ defmodule BulkUpsertTest do
     ]
 
     {:ok, %{upserted: 1, skipped: 0}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+      Bulkinup.upsert(Repo, Author, attrs_list,
         recover_changeset_errors: %{SocialLink => %{url: "https://example.com/unknown"}}
       )
 
@@ -612,7 +604,7 @@ defmodule BulkUpsertTest do
     attrs_list = [%{id: 1, name: "Alice", address: %{street: "1 Main St"}}]
 
     {:ok, %{upserted: 0, skipped: 1}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+      Bulkinup.upsert(Repo, Author, attrs_list,
         recover_changeset_errors: %{Address => %{street: "unknown"}}
       )
 
@@ -626,7 +618,7 @@ defmodule BulkUpsertTest do
     attrs_list = [%{id: 1, name: "Alice", posts: "garbage"}]
 
     {:ok, %{upserted: 0, skipped: 1}} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+      Bulkinup.upsert(Repo, Author, attrs_list,
         recover_changeset_errors: %{Author => %{posts: []}}
       )
 
@@ -641,7 +633,7 @@ defmodule BulkUpsertTest do
     ]
 
     assert {:ok, %{upserted: 0, skipped: 1}} =
-             BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+             Bulkinup.upsert(Repo, Author, attrs_list,
                recover_changeset_errors: %{Post => %{title: "UNTITLED"}}
              )
 
@@ -659,14 +651,14 @@ defmodule BulkUpsertTest do
       %{id: 1, name: "Alice", posts: [%{id: 101, author_id: 1, title: "a"}]}
     ]
 
-    {:ok, _} = BulkUpsert.bulk_upsert(Repo, Author, attrs_list, insert_all_opts: insert_all_opts)
+    {:ok, _} = Bulkinup.upsert(Repo, Author, attrs_list, insert_all_opts: insert_all_opts)
 
     updated_attrs_list = [
       %{id: 1, name: "Alicia", posts: [%{id: 101, author_id: 1, title: "b"}]}
     ]
 
     {:ok, _} =
-      BulkUpsert.bulk_upsert(Repo, Author, updated_attrs_list, insert_all_opts: insert_all_opts)
+      Bulkinup.upsert(Repo, Author, updated_attrs_list, insert_all_opts: insert_all_opts)
 
     # The author conflict did nothing, while the post conflict replaced the title
     assert Repo.get!(Author, 1).name == "Alice"
@@ -675,10 +667,10 @@ defmodule BulkUpsertTest do
 
   test "replace_all_except preserves the given fields on conflict" do
     {:ok, _} =
-      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice", phone_number: "555-1234"}])
+      Bulkinup.upsert(Repo, Author, [%{id: 1, name: "Alice", phone_number: "555-1234"}])
 
     {:ok, _} =
-      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alicia", phone_number: "555-9999"}],
+      Bulkinup.upsert(Repo, Author, [%{id: 1, name: "Alicia", phone_number: "555-9999"}],
         replace_all_except: [:name]
       )
 
@@ -693,7 +685,7 @@ defmodule BulkUpsertTest do
     ]
 
     {:ok, _} =
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list,
+      Bulkinup.upsert(Repo, Author, attrs_list,
         insert_all_function_atom: :insert_all_with_autogenerated_timestamps
       )
 
@@ -704,7 +696,7 @@ defmodule BulkUpsertTest do
 
   test "uses insert_all_function_module when provided, passing conflict opts and timeout" do
     {:ok, _} =
-      BulkUpsert.bulk_upsert(Repo, Author, [%{id: 1, name: "Alice"}],
+      Bulkinup.upsert(Repo, Author, [%{id: 1, name: "Alice"}],
         insert_all_function_module: ProxyRepo,
         timeout: 45_000
       )
@@ -724,7 +716,7 @@ defmodule BulkUpsertTest do
     ]
 
     assert_raise Postgrex.Error, ~r/foreign_key/, fn ->
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list)
+      Bulkinup.upsert(Repo, Author, attrs_list)
     end
 
     # The author was upserted before the post failed, but the transaction rolled it back
@@ -740,7 +732,7 @@ defmodule BulkUpsertTest do
     ]
 
     assert_raise Postgrex.Error, ~r/foreign_key/, fn ->
-      BulkUpsert.bulk_upsert(Repo, Author, attrs_list, chunk_size: 1)
+      Bulkinup.upsert(Repo, Author, attrs_list, chunk_size: 1)
     end
 
     assert Repo.aggregate(Author, :count) == 0
